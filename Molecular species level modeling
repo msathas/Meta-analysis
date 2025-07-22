@@ -134,17 +134,17 @@ cold_df <- modeled_cold1 %>%
   mutate(Treatment = "Cold")
 
 # Combine both datasets into one
-combined_data <- bind_rows(heat_df, cold_df)
-# View the combined data
-head(combined_data)
+combined_df <- bind_rows(heat_df, cold_df)
+# View the combined df
+head(combined_df)
 
 # Remove rows with missing values in key columns (e.g., yi, Treatment)
-#combined_data_cleaned <- combined_data %>%
+#combined_df_cleaned <- combined_df %>%
 #  filter(!is.na(yi) & !is.na(Treatment))
 
 # Apply the Shapiro-Wilk test for normality
 # Step 1: Fit a linear model (change variables as appropriate)
-model <- lm(yi ~ 1, data = heat_df) #if you want treatment wise test (similarly use cold_df) or use combined_data for all data
+model <- lm(yi ~ 1, data = heat_df) #if you want treatment wise test (similarly use cold_df) or use combined_df for all data
 # Step 2: Extract residuals
 residuals_model <- resid(model)
 # Step 3: Apply the Shapiro-Wilk test to the residuals
@@ -152,5 +152,5 @@ shapiro_test_res <- shapiro.test(residuals_model)
 # Step 4: View result
 shapiro_test_res
 
-#shapiro_test_result <- shapiro.test(combined_data$yi)
+#shapiro_test_result <- shapiro.test(combined_df$yi)
 #shapiro_test_result
