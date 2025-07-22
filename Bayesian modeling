@@ -2,7 +2,8 @@ library(tidyverse)
 library(brms)
 library(posterior)
 
-###This analysis was done per treatment. Assuming the input data is cold_data and heat_data respectively.
+#This analysis was done per treatment. Assuming the input data are cold_data and heat_data, respectively.
+#Repeat the following steps for heat_data as well.
 
 # Data preparation
 meta_cold <- cold_data %>%
