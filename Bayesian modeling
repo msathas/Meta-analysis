@@ -1,3 +1,4 @@
+########Bayesian modeling at Lipid class level
 library(tidyverse)
 library(brms)
 library(posterior)
