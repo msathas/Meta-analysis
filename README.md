@@ -16,23 +16,21 @@ This repository contains R code for performing a comprehensive meta-analysis of 
 - Estimates of heterogeneity (τ²) and inconsistency (I²)
 - Forest plots per lipid class/species using `metafor`
 
-### ✅ 3. Sensitivity Analysis
+### Sensitivity Analysis
 - Leave-one-out influence diagnostics
 - Cumulative effect size trajectory plots
-- Stratified analysis by tissue and plant species when sufficient studies are available
 
-### ✅ 4. Normality & Non-parametric Testing
+### Normality & Non-parametric Testing
 - Shapiro-Wilk test for distributional assumptions
 - Wilcoxon rank-sum tests comparing heat vs. cold treatment
-- Performed per plant species, lipid class, and molecular species
 
-### ✅ 5. VLCFA Analysis
-- Special module to explore the role of **very-long-chain fatty acids (≥ C20:0)**
+### VLCFA Analysis
+- Special module to explore the role of **very-long-chain fatty acids (≥ C22:0)**
 - Distribution trends and treatment effects highlighted
 
 ---
 
-## 📦 Dependencies
+## Libraries
 
 Install these R packages before running the scripts:
 
