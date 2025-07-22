@@ -1,0 +1,72 @@
+##############Very long chain fatty acid analysis
+#Assuming the input data is combined_data (with treatment, lipid class, molecular species, effect size and variance)
+
+# 1. Extract carbon number and filter for VLCFAs (assuming molecular species is in a format of 36:3)
+combined_data$Carbon <- as.numeric(sub(":.*", "", combined_data$Molecular_species))
+
+filtered_data <- combined_data %>%
+  filter(Carbon >= 42) %>%
+  select(-Carbon)
+
+# 3. Remove rows with missing values in key variables
+filtered_data_clean <- filtered_data %>%
+  filter(!is.na(yi), !is.na(vi), !is.na(Lipid_class), !is.na(Molecular_species),
+         !is.na(plant_species), !is.na(Tissue), !is.na(Treatment))
+
+# 4. Normalize Lipid_class and Molecular_species for matching
+filtered_data_clean <- filtered_data_clean %>%
+  mutate(
+    Lipid_class = str_trim(Lipid_class),
+    Molecular_species = str_trim(Molecular_species)
+  )
+
+filtered_data_clean %>%
+  distinct(Lipid_class, Molecular_species)
+
+filtered_data_clean %>%
+  distinct(Lipid_class, Molecular_species, Study) %>%
+  arrange(Lipid_class, Molecular_species) %>%
+  group_by(Lipid_class, Molecular_species) %>%
+  summarise(Studies = paste(unique(Study), collapse = ", "), .groups = "drop")
+
+############Here, the combinations of lipid class and molecular species that may not have at least one 22C must be removed. This step explicitly need manual curing of data to avoid
+#including the lipids that have more than 2 fatty acid chains that was previously included when 42C was used to filter the lipids.
+
+##Assuming you have removed misleading lipids
+filtered_data_final <- filtered_data_clean %>%
+  anti_join(excluded_combos, by = c("Lipid_class", "Molecular_species")) %>%
+  mutate(
+    Carbon_n = as.numeric(sub(":.*", "", Molecular_species))
+  )
+
+#Run meta-analysis per group
+meta_results <- filtered_data_final %>%
+  group_by(Lipid_class, Molecular_species, Treatment) %>% #modify the groups based on the analysis of interest. Carbon_n can be included if Carbon_n is specifically analyzed.
+  group_modify(~ {
+    tryCatch({
+      res <- rma(yi, vi, data = .x, method = "REML", random = ~1 | Study)
+      tibble(
+        Lipid_class = .x$Lipid_class[1],
+        Molecular_species = .x$Molecular_species[1],
+        Treatment = .x$Treatment[1],
+        k = res$k,
+        estimate = res$b[1],
+        ci_lb = res$ci.lb,
+        ci_ub = res$ci.ub,
+        pval = res$pval,
+        I2 = res$I2
+      )
+    }, error = function(e) {
+      tibble(
+        Lipid_class = .x$Lipid_class[1],
+        Molecular_species = .x$Molecular_species[1],
+        Treatment = .x$Treatment[1],
+        k = nrow(.x),
+        estimate = NA, ci_lb = NA, ci_ub = NA, pval = NA, I2 = NA
+      )
+    })
+  }) %>%
+  ungroup()
+# Example heatmap of effect sizes
+meta_results <- meta_results %>%
+  mutate(species_treatment = paste(Lipid_class, Molecular_species, Treatment, sep = "_"))
