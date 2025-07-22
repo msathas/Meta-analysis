@@ -1,0 +1,97 @@
+###############Heterogeneity test
+##Separately for heat_data and cold_data (Treatment wise)
+
+#filter lipid classes for at least 2 studies and fit random effect model
+heat_models <- heat_data %>%
+  filter(!is.na(yi), !is.na(Lipid_class)) %>%
+  group_by(Lipid_class) %>%
+  filter(n_distinct(Study) >= 2) %>%
+  ungroup() %>%
+  split(.$Lipid_class) %>%
+  map(~ tryCatch(
+    rma.mv(
+      yi, vi,
+      random = ~1 | Study,
+      mods = ~ plant_species + tissue_type + Molecular_species + Temperature + Control + Sample_size + Analytical_technique + Time_points + Growth_stage + Genotype,
+      data = .x,
+      method = "ML"
+    ),
+    error = function(e) NULL
+  )) %>%
+  compact()
+
+#I^2 extraction for htereogeneity test
+extract_heterogeneity <- function(model_list) {
+  map_df(names(model_list), function(name) {
+    model <- model_list[[name]]
+    
+    # Mean of sampling variances
+    mean_vi <- tryCatch({
+      mean(as.numeric(model$data$vi), na.rm = TRUE)
+    }, error = function(e) NA)
+    
+    # Calculate I²
+    I2 <- tryCatch({
+      if (!is.na(mean_vi) && !is.na(model$tau2)) {
+        100 * model$tau2 / (model$tau2 + mean_vi)
+      } else {
+        NA
+      }
+    }, error = function(e) NA)
+    
+    tibble(
+      Carbon = name,
+      k = model$k,
+      tau2 = model$tau2,
+      I2 = I2,
+      Q = model$QE,
+      Q_pval = model$QEp
+    )
+  })
+}
+heat_summary <- extract_heterogeneity(heat_models)
+summary(heat_summary)
+summary(heat_summary$I2)
+summary(heat_summary$Q)
+names(heat_summary)
+heat_summary %>%
+  filter(I2 == 0 & Q_pval < 0.05) %>%
+  arrange(desc(Q))
+
+#If needed
+#heat_summary_clean <- het_summary %>%
+#  filter(!is.na(Q), !is.na(Q_pval))
+
+####Repeat the same for cold_data
+
+
+#################Sensitivity test
+#Assuming input data is heat_data
+# Optional: Sensitivity
+leave1out_mv <- function(data, study_col = "Study") {
+  unique_studies <- unique(data[[study_col]])
+  results <- lapply(unique_studies, function(study) {
+    data_loo <- data %>% filter(.data[[study_col]] != study)
+    model <- tryCatch(
+      rma.mv(yi, vi, random = ~1 | Study, data = data_loo),
+      error = function(e) NULL
+    )
+    if (!is.null(model)) {
+      data.frame(
+        Study = study,
+        yi = coef(model)[1],
+        se = sqrt(vcov(model)[1, 1])
+      )
+    } else {
+      data.frame(Study = study, yi = NA, se = NA)
+    }
+  })
+  do.call(rbind, results)
+}
+
+heat_sensitivity <- leave1out_mv(heat_data)
+
+res_adj <- rma.mv(yi, vi, random = ~1 | Study, data = heat_sensitivity)
+summary(res_adj)
+
+##Repeat the same step for cold_data
