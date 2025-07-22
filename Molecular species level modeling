@@ -1,0 +1,64 @@
+#######Modeling and normality check for analysis at the molecular species level 
+
+#Assuming the input data are cold_data and heat_data
+
+## Filter lipid classes that have at least 2 studies
+filtered_heat2 <- heat_data %>%
+  group_by(Lipid_class) %>%
+  filter(n() >= 2) %>%
+  ungroup()
+
+# Check distribution of molecular species
+table(filtered_heat2$Molecular_species)
+
+# Perform meta-analysis on molecular species level
+analyze_per_molecular_species <- function(data) {
+  data %>%
+    filter(!is.na(yi), !is.na(Molecular_species)) %>%
+    group_by(Lipid_class, Molecular_species) %>%
+    filter(n() >= 2) %>%  # Ensure at least 2 studies for each lipid class and molecular species
+    ungroup() %>%
+    split(.$Lipid_class) %>%
+    map(~ tryCatch(
+      rma.mv(yi, vi, random = ~1 | Study, mods = ~ plant_species + Tissue + Growth_stage, data = .x),
+      error = function(e) NULL
+    )) %>%
+    compact()
+}
+
+# Apply the analysis
+heat2_models <- analyze_per_molecular_species(filtered_heat2)
+
+# As the meta-analysis models are stored in `heat_models`
+# Create a function to extract modeled effect sizes and standard errors
+extract_model_results <- function(model_list) {
+  # Initialize an empty list to store results
+  results <- list()
+  
+  for (lipid in names(model_list)) {
+    model <- model_list[[lipid]]
+    if (!is.null(model)) {
+      # Extract the modeled data (effect sizes and variances)
+      df <- model$data
+      results[[lipid]] <- df %>%
+        mutate(Lipid_class = lipid)  # Add Lipid_class column
+    }
+  }
+  
+  # Combine all results into a single data frame
+  combined_results <- bind_rows(results)
+  
+  return(combined_results)
+}
+
+# Extract modeled data from heat_models
+modeled_heat2 <- extract_model_results(heat2_models)
+
+# Now, calculate mean effect size and standard error (se) for each molecular species and lipid class
+heat_summary <- modeled_heat2 %>%
+  group_by(Lipid_class, Molecular_species) %>%
+  summarise(
+    mean_yi = mean(yi, na.rm = TRUE),  # Mean effect size (from meta-analysis)
+    se_yi = sqrt(sum(vi, na.rm = TRUE) / n()),  # Standard error of the effect size
+    .groups = "drop"
+  )
