@@ -165,5 +165,35 @@ results_df <- bind_rows(results_list)
 
 #shapiro_test_result <- shapiro.test(combined_df$yi)
 #shapiro_test_result
-# Save results to CSV
-write_csv(results_df, "bayesian_meta_results.csv")
+
+# Perform a Wilcoxon test before aggregation
+significance_results <- combined_data %>%
+  filter(!is.na(yi)) %>%
+  group_by(Lipid_class, Molecular_species) %>%
+  filter(n_distinct(Treatment) == 2) %>%  # Must have both Heat and Cold
+  summarise(
+    p_value = tryCatch(
+      wilcox.test(yi ~ Treatment, exact = FALSE)$p.value,
+      error = function(e) NA_real_
+    ),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    significance = case_when(
+      is.na(p_value) ~ NA_character_,
+      p_value < 0.05 ~ "*",
+      TRUE ~ "ns"
+    )
+  )
+
+# Aggregate combined data per Treatment and lipid
+combined_data_aggregated <- combined_data %>%
+  filter(Molecular_species != "" & !is.na(Molecular_species)) %>%
+  group_by(Molecular_species, Treatment, Lipid_class) %>%
+  summarise(
+    mean_yi = sum(yi / vi, na.rm = TRUE) / sum(1 / vi, na.rm = TRUE),  # Weighted mean
+    se_yi = sqrt(1 / sum(ifelse(vi > 0, 1 / vi, NA), na.rm = TRUE)),   # Weighted SE
+    .groups = "drop"
+  ) %>%
+  left_join(significance_results, by = c("Lipid_class", "Molecular_species"))
+
