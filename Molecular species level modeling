@@ -1,156 +1,60 @@
 #######Modeling and normality check for analysis at the molecular species level 
 
-#Assuming the input data are cold_data and heat_data
+# Assuming the input is combined_data
+# Modeling is done per lipid class per molecular species separately
 
-## Filter lipid classes that have at least 2 studies
-filtered_heat2 <- heat_data %>%
-  group_by(Lipid_class) %>%
-  filter(n() >= 2) %>%
-  ungroup()
+# Create group_id combining Lipid_class and Molecular_species
+combined_data <- combined_data %>%
+  mutate(group_id = paste(Lipid_class, Molecular_species, sep = "_"))
 
-# Check distribution of molecular species
-table(filtered_heat2$Molecular_species)
+# Get unique groups
+groups <- unique(combined_data$group_id)
 
-# Perform meta-analysis on the molecular species level
-analyze_per_molecular_species <- function(data) {
-  data %>%
-    filter(!is.na(yi), !is.na(Molecular_species)) %>%
-    group_by(Lipid_class, Molecular_species) %>%
-    filter(n() >= 2) %>%  # Ensure at least 2 studies for each lipid class and molecular species
-    ungroup() %>%
-    split(.$Lipid_class) %>%
-    map(~ tryCatch(
-      rma.mv(yi, vi, random = ~1 | Study, mods = ~ plant_species + Tissue + Growth_stage, data = .x),
-      error = function(e) NULL
-    )) %>%
-    compact()
-}
+cat("Total groups to fit:", length(groups), "\n")
 
-# Apply the analysis
-heat2_models <- analyze_per_molecular_species(filtered_heat2)
+# Prepare empty list to store results
+results_list <- list()
 
-# As the meta-analysis models are stored in `heat_models`
-# Create a function to extract modeled effect sizes and standard errors
-extract_model_results <- function(model_list) {
-  # Initialize an empty list to store results
-  results <- list()
-  
-  for (lipid in names(model_list)) {
-    model <- model_list[[lipid]]
-    if (!is.null(model)) {
-      # Extract the modeled data (effect sizes and variances)
-      df <- model$data
-      results[[lipid]] <- df %>%
-        mutate(Lipid_class = lipid)  # Add Lipid_class column
-    }
-  }
-  
-  # Combine all results into a single data frame
-  combined_results <- bind_rows(results)
-  
-  return(combined_results)
-}
+# Loop over groups to fit Bayesian meta-analysis models
+for (g in groups) {
+  cat("Fitting model for group:", g, "\n")
 
-# Extract modeled data from heat_models
-modeled_heat2 <- extract_model_results(heat2_models)
+  dat_sub <- combined_data %>% filter(group_id == g)
 
-# Now, calculate mean effect size and standard error (se) for each molecular species and lipid class
-heat_summary <- modeled_heat2 %>%
-  group_by(Lipid_class, Molecular_species) %>%
-  summarise(
-    mean_yi = mean(yi, na.rm = TRUE),  # Mean effect size (from meta-analysis)
-    se_yi = sqrt(sum(vi, na.rm = TRUE) / n()),  # Standard error of the effect size
-    .groups = "drop"
+  # Skip groups without both treatments (Heat and Cold)
+  if(length(unique(dat_sub$Treatment)) < 2) next
+
+  fit <- brm(
+    formula = yi | se(sqrt(vi)) ~ Treatment + (1 | Study),
+    data = dat_sub,
+    prior = c(
+      prior(normal(0, 1), class = "Intercept"),
+      prior(cauchy(0, 1), class = "sd")
+    ),
+    chains = 4,
+    iter = 2000,
+    warmup = 500,
+    cores = 4,
+    control = list(adapt_delta = 0.95),
+    silent = TRUE,
+    refresh = 0
   )
 
-####Do the same for cold_data as well
-# Filter lipid classes that have at least 2 studies
-filtered_cold2 <- cold_data %>%
-  group_by(Lipid_class) %>%
-  filter(n() >= 2) %>%
-  ungroup()
+  summ <- summary(fit)$fixed
+  treat_row <- summ[rownames(summ) == "TreatmentHeat", ]
 
-# Check distribution of molecular species within a specific lipid class
-table(filtered_cold2$Molecular_species)
-
-# Perform meta-analysis on the molecular species level
-analyze_per_molecular_species <- function(data) {
-  data %>%
-    filter(!is.na(yi), !is.na(Molecular_species)) %>%
-    group_by(Lipid_class, Molecular_species) %>%
-    filter(n() >= 2) %>%  # Ensure at least 2 studies for each lipid class and molecular species
-    ungroup() %>%
-    split(.$Lipid_class) %>%
-    map(~ tryCatch(
-      rma.mv(yi, vi, random = ~1 | Study, mods = ~ plant_species + Tissue + Growth_stage, data = .x),
-      error = function(e) NULL
-    )) %>%
-    compact()
-}
-
-# Apply the analysis
-cold1_models <- analyze_per_molecular_species(filtered_cold2)
-
-# Assuming the meta-analysis models are stored in `heat_models`
-# Create a function to extract modeled effect sizes and standard errors
-extract_model_results <- function(model_list) {
-  # Initialize an empty list to store results
-  results <- list()
-  
-  for (lipid in names(model_list)) {
-    model <- model_list[[lipid]]
-    if (!is.null(model)) {
-      # Extract the modeled data (effect sizes and variances)
-      df <- model$data
-      results[[lipid]] <- df %>%
-        mutate(Lipid_class = lipid)  # Add Lipid_class column
-    }
-  }
-  
-  # Combine all results into a single data frame
-  combined_results <- bind_rows(results)
-  
-  return(combined_results)
-}
-
-# Extract modeled data from heat_models
-modeled_cold1 <- extract_model_results(cold1_models)
-
-# Now, calculate mean effect size and standard error (se) for each molecular species and lipid class
-cold_summary <- modeled_cold1 %>%
-  group_by(Lipid_class, Molecular_species) %>%
-  summarise(
-    mean_yi = mean(yi, na.rm = TRUE),  # Mean effect size (from meta-analysis)
-    se_yi = sqrt(sum(vi, na.rm = TRUE) / n()),  # Standard error of the effect size
-    .groups = "drop"
+  results_list[[g]] <- data.frame(
+    group = g,
+    estimate = treat_row["Estimate"],
+    se = treat_row["Est.Error"],
+    lower95 = treat_row["l-95% CI"],
+    upper95 = treat_row["u-95% CI"],
+    significant = ifelse(treat_row["l-95% CI"] > 0 | treat_row["u-95% CI"] < 0, TRUE, FALSE)
   )
+}
 
-# Assuming you have modeled both datasets: `heat_data` and `cold_data`
-# Add Treatment column explicitly if it's not already there
-heat_df <- modeled_heat2 %>%
-  mutate(Treatment = "Heat")
+# Combine all results into one dataframe
+results_df <- bind_rows(results_list)
 
-cold_df <- modeled_cold1 %>%
-  mutate(Treatment = "Cold")
-
-# Combine both datasets into one
-combined_df <- bind_rows(heat_df, cold_df)
-# View the combined df
-head(combined_df)
-
-# Remove rows with missing values in key columns (e.g., yi, Treatment)
-#combined_df_cleaned <- combined_df %>%
-#  filter(!is.na(yi) & !is.na(Treatment))
-
-# Apply the Shapiro-Wilk test for normality
-# Step 1: Fit a linear model (change variables as appropriate)
-model <- lm(yi ~ 1, data = heat_df) #if you want treatment wise test (similarly use cold_df) or use combined_df for all data
-# Step 2: Extract residuals
-residuals_model <- resid(model)
-# Step 3: Apply the Shapiro-Wilk test to the residuals
-shapiro_test_res <- shapiro.test(residuals_model)
-# Step 4: View result
-shapiro_test_res
-
-#shapiro_test_result <- shapiro.test(combined_df$yi)
-#shapiro_test_result
+# Save results to CSV
+write_csv(results_df, "bayesian_meta_results.csv")
