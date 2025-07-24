@@ -92,6 +92,46 @@ analyze_per_molecular_species <- function(data) {
 # Apply the analysis
 cold1_models <- analyze_per_molecular_species(filtered_cold2)
 
+# Optional: If you don't want to loose sparse data for major lipids (here, TG is sparse)
+# Robust meta-analysis function with fallback
+safe_rma <- function(data) {
+  tryCatch({
+    # Try full model with moderators first
+    rma.mv(yi, vi,
+           random = ~1 | Study,
+           mods = ~ plant_species + Tissue + Growth_stage,
+           data = data)
+  }, error = function(e1) {
+    tryCatch({
+      message("Falling back to random effects only model for: ", unique(data$Lipid_class))
+      # Random effects only, no moderators
+      rma.mv(yi, vi,
+             random = ~1 | Study,
+             data = data)
+    }, error = function(e2) {
+      message("Both models failed for: ", unique(data$Lipid_class))
+      return(NULL)
+    })
+  })
+}
+
+# Example usage: run this on a split dataset by Lipid_class
+# Assume your filtered data is in 'filtered_cold2'
+
+# Split data by Lipid_class
+split_data <- filtered_cold2 %>%
+  filter(!is.na(yi), !is.na(vi)) %>%
+  group_by(Lipid_class, Molecular_species) %>%
+  filter(n() >= 1) %>%
+  ungroup() %>%
+  split(.$Lipid_class)
+
+# Run safe_rma on each lipid class
+cold1_models <- map(split_data, safe_rma)
+
+# Remove NULL results (failed models)
+cold1_models <- compact(cold1_models)
+
 # Assuming the meta-analysis models are stored in `heat_models`
 # Create a function to extract modeled effect sizes and standard errors
 extract_model_results <- function(model_list) {
