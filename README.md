@@ -1,4 +1,4 @@
-# Lipidomics Meta-Analysis under Temperature Stress
+# Conserved Mechanisms of Plant Lipidome Remodeling under Heat and Cold Stresses Revealed through a Meta-Analysis
 
 This repository contains R code for performing a comprehensive meta-analysis of plant lipidomic responses to temperature stress (heat and cold). The focus is on heterogeneity and sensitivity analysis, lipid class–specific and molecular species–level modeling. Very-long-chain fatty acids (VLCFAs) are also given special consideration.
 
