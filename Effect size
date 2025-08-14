@@ -1,0 +1,31 @@
+# Effect size calculation and data loading
+# Load and clean function
+load_and_prepare <- function(file_path, treatment_label) {
+  data <- read.csv(file_path)
+  
+  data_clean <- data %>%
+    mutate(
+      Temperature = as.character(Temperature),
+      Control = as.character(Control),
+      SD_T = abs(SD_T),
+      SD_C = abs(SD_C),
+      Sample_size = as.numeric(Sample_size),
+      Treatment = as.character(treatment_label)  # Ensure consistent character type
+    ) %>%
+    filter(
+      SD_C > 0, SD_T > 0,
+      !is.na(mean_T), !is.na(mean_C),
+      !is.na(Sample_size), Sample_size > 1
+    )
+  
+  escalc(
+    measure = "SMDH",
+    m1i = mean_T, sd1i = SD_T, n1i = Sample_size,
+    m2i = mean_C, sd2i = SD_C, n2i = Sample_size,
+    data = data_clean
+  )
+}
+
+# Run the function on your file
+heat_data <- load_and_prepare("heat_data.csv", "Heat")
+cold_data <- load_and_prepare("cold_data.csv", "Cold")
