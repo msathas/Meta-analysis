@@ -16,16 +16,17 @@ This repository contains R code for performing a comprehensive meta-analysis of 
 - Cumulative effect size trajectory plots
 
 ### Bayesian Hierarchical Modeling (Lipid class response)
-- Conducted separately at the lipid for **cold** and **heat** treatments
+- Conducted separately at each lipid class for "cold" and "heat" treatments
 - Models include nested structure by study and lipid group
 - Priors and diagnostics implemented using `brms`
 
-### Normality & Non-parametric Testing (Molecular species wise response)
+### Normality & Non-parametric Testing (Molecular species-wise response)
 - Shapiro-Wilk test for distributional assumptions
 - Wilcoxon rank-sum tests comparing heat vs. cold treatment
+- Models were fit for "heat" and "cold" treatments separately and combined for the comparison tests
 
 ### VLCFA Analysis
-- Special module to explore the role of **very-long-chain fatty acids (≥ C22:0)**
+- Special module to explore the role of "very-long-chain fatty acids (≥C22)"
 - Distribution trends and treatment effects highlighted
 
 ---
@@ -36,5 +37,5 @@ Install these R packages before running the scripts:
 
 ```r
 install.packages(c(
-  "tidyverse", "brms", "metafor", "bayesplot", "ggpubr", "readr", "patchwork"
+  "tidyverse", "brms", "metafor", "dplyr", "tibble", "readr", "ggplot2", "tidyr", "purrr", "stringr", "posterior"
 ))
