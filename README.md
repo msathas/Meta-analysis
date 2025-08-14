@@ -7,6 +7,11 @@ This repository contains R code for performing a comprehensive meta-analysis of 
 
 ##Main Features
 
+### Effect size calculation
+- Loads data, followed by data cleaning
+- Label the "heat" and "cold" treatments properly
+- Calculates effect size for each observation
+ 
 ### Heterogeneity Analysis
 - Estimates of heterogeneity (τ²) and inconsistency (I²)
 - Forest plots per lipid class/species using `metafor`
