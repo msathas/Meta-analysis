@@ -1,5 +1,7 @@
 # Effect size calculation and data loading
-# The input has mean values of control and treatment (cold or heat), standard deviation of control and treatment
+# The input must mean values of control and treatment (cold or heat), standard deviation of control and treatment
+# The namings of plant species, tissues, growth stages, and lipid classes must be harmonized
+
 # Load and clean function
 load_and_prepare <- function(file_path, treatment_label) {
   data <- read.csv(file_path)
@@ -30,3 +32,5 @@ load_and_prepare <- function(file_path, treatment_label) {
 # Run the function on your file
 heat_data <- load_and_prepare("heat_data.csv", "Heat")
 cold_data <- load_and_prepare("cold_data.csv", "Cold")
+
+combined_data <- bind_rows(heat_data, cold_data)
