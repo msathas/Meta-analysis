@@ -1,4 +1,5 @@
 # Effect size calculation and data loading
+# The input has mean values of control and treatment (cold or heat), standard deviation of control and treatment
 # Load and clean function
 load_and_prepare <- function(file_path, treatment_label) {
   data <- read.csv(file_path)
