@@ -92,3 +92,117 @@ print(summary(fit_pooled_cold))
 sink()
 
 cat("DONE. Cold pooled fit saved to:", normalizePath(OUTDIR), "\n")
+
+
+# ----------------------------
+# Load fit
+# ----------------------------
+fit <- readRDS(FITFILE)
+if (posterior::ndraws(as_draws(fit)) <= 0) stop("Fit has no posterior draws: ", FITFILE)
+
+# ----------------------------
+# Core extractor (platform/stage marginalization is controlled by marginal_vars)
+# ----------------------------
+extract_marginal <- function(fit, keep_vars, marginal_vars, re_formula_used = NA) {
+  dd <- fit$data
+  vi_ref <- stats::median(dd$vi, na.rm = TRUE)
+
+  keep_df <- dd %>% distinct(across(all_of(keep_vars)))
+  marg_df <- dd %>% distinct(across(all_of(marginal_vars)))
+
+  grid <- tidyr::crossing(keep_df, marg_df) %>%
+    mutate(vi = vi_ref)
+
+  # Align factor levels to fit$data (hard fail if mismatch)
+  common <- intersect(names(grid), names(dd))
+  for (v in common) {
+    if (is.factor(dd[[v]])) {
+      grid[[v]] <- factor(as.character(grid[[v]]), levels = levels(dd[[v]]))
+    }
+  }
+  for (v in common) {
+    if (is.factor(dd[[v]]) && any(is.na(grid[[v]]))) {
+      stop("newdata has levels not in fit$data for: ", v)
+    }
+  }
+
+  lp <- posterior_linpred(
+    fit,
+    newdata = grid,
+    re_formula = re_formula_used,
+    allow_new_levels = FALSE
+  ) # draws × n_grid
+
+  grp <- interaction(grid[, keep_vars, drop = FALSE], drop = TRUE, lex.order = TRUE)
+  idx_list <- split(seq_len(nrow(grid)), grp)
+
+  lp_marg <- sapply(idx_list, function(idx) rowMeans(lp[, idx, drop = FALSE]))
+  if (is.vector(lp_marg)) lp_marg <- matrix(lp_marg, ncol = 1)
+
+  keys <- keep_df %>%
+    mutate(.grp = interaction(across(all_of(keep_vars)), drop = TRUE, lex.order = TRUE)) %>%
+    distinct(.grp, .keep_all = TRUE) %>%
+    arrange(match(.grp, colnames(lp_marg))) %>%
+    select(-.grp)
+
+  est      <- apply(lp_marg, 2, mean)
+  se_post  <- apply(lp_marg, 2, sd)
+  q2.5     <- apply(lp_marg, 2, quantile, probs = 0.025)
+  q97.5    <- apply(lp_marg, 2, quantile, probs = 0.975)
+  q5       <- apply(lp_marg, 2, quantile, probs = 0.05)
+  q95      <- apply(lp_marg, 2, quantile, probs = 0.95)
+  prob_pos <- apply(lp_marg, 2, function(x) mean(x > 0))
+
+  bind_cols(
+    tibble(stress = STRESS),
+    keys,
+    tibble(
+      est = est,
+      se_post = se_post,
+      q2.5 = q2.5,
+      q97.5 = q97.5,
+      q5 = q5,
+      q95 = q95,
+      prob_pos = prob_pos,
+      direction_95 = case_when(
+        q2.5 > 0  ~ "increase",
+        q97.5 < 0 ~ "decrease",
+        TRUE      ~ "no_clear_change"
+      ),
+      direction_p90 = case_when(
+        prob_pos >= 0.90 ~ "increase",
+        prob_pos <= 0.10 ~ "decrease",
+        TRUE             ~ "no_clear_change"
+      )
+    )
+  )
+}
+
+# L1: Lipid_class (platform + stage marginalized)
+L1 <- extract_marginal(
+  fit,
+  keep_vars = c("Lipid_class"),
+  marginal_vars = c("plant_species", "Tissue", "Growth_stage", "platform"),
+  re_formula_used = NA
+)
+write_csv(L1, OUT_L1)
+
+# L2: plant_species × Lipid_class (platform + stage marginalized)
+# include plant_species lipid random slopes
+L2 <- extract_marginal(
+  fit,
+  keep_vars = c("plant_species", "Lipid_class"),
+  marginal_vars = c("Tissue", "Growth_stage", "platform"),
+  re_formula_used = ~(0 + Lipid_class || plant_species)
+)
+write_csv(L2, OUT_L2)
+
+# L3: Tissue × Lipid_class (platform + stage marginalized)
+L3 <- extract_marginal(
+  fit,
+  keep_vars = c("Tissue", "Lipid_class"),
+  marginal_vars = c("plant_species", "Growth_stage", "platform"),
+  re_formula_used = NA
+)
+write_csv(L3, OUT_L3)
+
