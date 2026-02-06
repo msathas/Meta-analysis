@@ -1,68 +1,197 @@
 ###############Heterogeneity test
 ##Separately for heat_data and cold_data (Treatment wise)
 
-#filter lipid classes for at least 2 studies and fit random effect model
-heat_models <- heat_data %>%
-  filter(!is.na(yi), !is.na(Lipid_class)) %>%
-  group_by(Lipid_class) %>%
-  filter(n_distinct(Study) >= 2) %>%
-  ungroup() %>%
-  split(.$Lipid_class) %>%
-  map(~ tryCatch(
+
+#HETEROGENEITY PER LIPID CLASS (UNMODERATED)
+
+fit_unmoderated_class_models <- function(df, min_studies = 2) {
+  df %>%
+    filter(!is.na(yi), !is.na(vi), !is.na(Lipid_class), !is.na(Study)) %>%
+    group_by(Lipid_class) %>%
+    filter(n_distinct(Study) >= min_studies) %>%
+    ungroup() %>%
+    split(.$Lipid_class) %>%
+    map(~ tryCatch(
+      rma.mv(yi, vi, random = ~ 1 | Study, data = .x, method = "REML"),
+      error = function(e) NULL
+    )) %>%
+    compact()
+}
+
+summarize_heterogeneity <- function(model_list) {
+  map_df(names(model_list), function(cls) {
+    m <- model_list[[cls]]
+    Q  <- as.numeric(m$QE)
+    pQ <- as.numeric(m$QEp)
+    k  <- as.integer(m$k)
+    p  <- as.integer(m$p)
+    df <- k - p
+
+    I2_Q <- if (!is.na(Q) && Q > 0 && df > 0) max(0, (Q - df) / Q) * 100 else NA_real_
+    tau2 <- if (!is.null(m$sigma2) && length(m$sigma2) >= 1) as.numeric(m$sigma2[1]) else NA_real_
+
+    pi_lo <- pi_hi <- NA_real_
+    pred <- tryCatch(predict(m), error = function(e) NULL)
+    if (!is.null(pred)) {
+      pi_lo <- as.numeric(pred$pi.lb)
+      pi_hi <- as.numeric(pred$pi.ub)
+    }
+
+    tibble(
+      Lipid_class = cls,
+      k = k,
+      Q = Q,
+      df = df,
+      Q_pval = pQ,
+      tau2 = tau2,
+      I2 = I2_Q,
+      PI_lb = pi_lo,
+      PI_ub = pi_hi
+    )
+  }) %>% arrange(desc(Q))
+}
+
+
+# MODERATOR PIPELINE (SEQUENTIAL)
+fit_seq_models_one_class <- function(dat_cls) {
+  dat_cls <- droplevels(dat_cls)
+
+  m0 <- tryCatch(
+    rma.mv(yi, vi, random = ~1|Study, data = dat_cls, method = "REML"),
+    error = function(e) NULL
+  )
+
+  m1 <- tryCatch(
+    rma.mv(yi, vi, random = ~1|Study, mods = ~ platform, data = dat_cls, method = "REML"),
+    error = function(e) NULL
+  )
+
+  m2 <- tryCatch(
     rma.mv(
-      yi, vi,
-      random = ~1 | Study,
-      mods = ~ plant_species + tissue_type + Molecular_species + Temperature + Control + Sample_size + Analytical_technique + Time_points + Growth_stage + Genotype,
-      data = .x,
-      method = "ML"
+      yi, vi, random = ~1|Study,
+      mods = ~ platform + plant_species + Tissue + Growth_stage,
+      data = dat_cls, method = "REML"
     ),
     error = function(e) NULL
-  )) %>%
-  compact()
+  )
 
-#I^2 extraction for htereogeneity test
-extract_heterogeneity <- function(model_list) {
-  map_df(names(model_list), function(name) {
-    model <- model_list[[name]]
-    
-    # Mean of sampling variances
-    mean_vi <- tryCatch({
-      mean(as.numeric(model$data$vi), na.rm = TRUE)
-    }, error = function(e) NA)
-    
-    # Calculate I²
-    I2 <- tryCatch({
-      if (!is.na(mean_vi) && !is.na(model$tau2)) {
-        100 * model$tau2 / (model$tau2 + mean_vi)
-      } else {
-        NA
-      }
-    }, error = function(e) NA)
-    
-    tibble(
-      Carbon = name,
-      k = model$k,
-      tau2 = model$tau2,
-      I2 = I2,
-      Q = model$QE,
-      Q_pval = model$QEp
-    )
-  })
+  list(m0 = m0, m1 = m1, m2 = m2)
 }
-heat_summary <- extract_heterogeneity(heat_models)
-summary(heat_summary)
-summary(heat_summary$I2)
-summary(heat_summary$Q)
-names(heat_summary)
-heat_summary %>%
-  filter(I2 == 0 & Q_pval < 0.05) %>%
-  arrange(desc(Q))
 
-#If needed
-#heat_summary_clean <- het_summary %>%
-#  filter(!is.na(Q), !is.na(Q_pval))
+extract_seq_summary <- function(cls, models) {
 
-####Repeat the same for cold_data
+  get_tau2 <- function(m) {
+    if (is.null(m)) return(NA_real_)
+    if (!is.null(m$sigma2) && length(m$sigma2) >= 1) return(as.numeric(m$sigma2[1]))
+    NA_real_
+  }
+  get_Q   <- function(m) if (!is.null(m)) as.numeric(m$QE) else NA_real_
+  get_df  <- function(m) if (!is.null(m)) as.integer(m$k - m$p) else NA_integer_
+  get_pQ  <- function(m) if (!is.null(m)) as.numeric(m$QEp) else NA_real_
+  get_I2Q <- function(m) {
+    if (is.null(m)) return(NA_real_)
+    Q <- as.numeric(m$QE); df <- as.integer(m$k - m$p)
+    if (is.na(Q) || Q <= 0 || df <= 0) return(NA_real_)
+    max(0, (Q - df)/Q) * 100
+  }
+  get_QM  <- function(m) if (!is.null(m)) as.numeric(m$QM) else NA_real_
+  get_pQM <- function(m) if (!is.null(m)) as.numeric(m$QMp) else NA_real_
+
+  tau0 <- get_tau2(models$m0)
+  tau1 <- get_tau2(models$m1)
+  tau2 <- get_tau2(models$m2)
+
+  R2_1 <- if (!is.na(tau0) && tau0 > 0 && !is.na(tau1)) (tau0 - tau1) / tau0 else NA_real_
+  R2_2 <- if (!is.na(tau0) && tau0 > 0 && !is.na(tau2)) (tau0 - tau2) / tau0 else NA_real_
+
+  tibble(
+    Lipid_class = cls,
+    k = if (!is.null(models$m0)) models$m0$k else NA_integer_,
+
+    tau2_m0 = tau0, Q_m0 = get_Q(models$m0), df_m0 = get_df(models$m0), pQ_m0 = get_pQ(models$m0), I2_m0 = get_I2Q(models$m0),
+
+    tau2_m1 = tau1, Q_m1 = get_Q(models$m1), df_m1 = get_df(models$m1), pQ_m1 = get_pQ(models$m1), I2_m1 = get_I2Q(models$m1),
+    QM_m1 = get_QM(models$m1), pQM_m1 = get_pQM(models$m1),
+    R2_tau_platform = R2_1,
+
+    tau2_m2 = tau2, Q_m2 = get_Q(models$m2), df_m2 = get_df(models$m2), pQ_m2 = get_pQ(models$m2), I2_m2 = get_I2Q(models$m2),
+    QM_m2 = get_QM(models$m2), pQM_m2 = get_pQM(models$m2),
+    R2_tau_full = R2_2
+  )
+}
+
+run_pipeline_for_stress <- function(df, stress_label, min_studies = 2, excluded = NULL) {
+
+  df <- df %>% filter(Treatment == stress_label)
+
+  if (!is.null(excluded)) {
+    df <- df %>% filter(!as.character(Lipid_class) %in% excluded)
+  }
+
+  # A) unmoderated heterogeneity
+  class_models <- fit_unmoderated_class_models(df, min_studies = min_studies)
+  het_table <- summarize_heterogeneity(class_models)
+
+  write.csv(
+    het_table,
+    file.path(OUTDIR, paste0(stress_label, "_heterogeneity_unmoderated.csv")),
+    row.names = FALSE
+  )
+
+  # B) sequential models
+  split_cls <- df %>%
+    filter(!is.na(Lipid_class), !is.na(Study), !is.na(platform), !is.na(Tissue), !is.na(Growth_stage), !is.na(plant_species)) %>%
+    group_by(Lipid_class) %>%
+    filter(n_distinct(Study) >= min_studies) %>%
+    ungroup() %>%
+    split(.$Lipid_class)
+
+  seq_results <- imap_dfr(split_cls, function(dat_cls, cls) {
+    models <- fit_seq_models_one_class(dat_cls)
+    extract_seq_summary(as.character(cls), models)
+  }) %>% arrange(desc(Q_m0))
+
+  write.csv(
+    seq_results,
+    file.path(OUTDIR, paste0(stress_label, "_heterogeneity_sequential_models.csv")),
+    row.names = FALSE
+  )
+
+  # C) plots
+  pQ <- ggplot(het_table %>% filter(!is.na(Q)), aes(x = reorder(Lipid_class, Q), y = Q, fill = Q_pval < 0.05)) +
+    geom_col() + coord_flip() +
+    theme_minimal() +
+    labs(x = "Lipid class", y = "Cochran's Q (unmoderated)", fill = "Q p<0.05")
+  ggsave(file.path(OUTDIR, paste0(stress_label, "_Q_unmoderated.png")), pQ, width = 7, height = 10, dpi = 300)
+
+  pI2 <- ggplot(het_table %>% filter(!is.na(I2)), aes(x = reorder(Lipid_class, I2), y = I2, fill = Q_pval < 0.05)) +
+    geom_col() + coord_flip() +
+    theme_minimal() +
+    labs(x = "Lipid class", y = "I² = max(0,(Q-df)/Q) (unmoderated)", fill = "Q p<0.05")
+  ggsave(file.path(OUTDIR, paste0(stress_label, "_I2_unmoderated.png")), pI2, width = 7, height = 10, dpi = 300)
+
+  list(unmoderated_het = het_table, sequential = seq_results)
+}
+
+
+#RUN FOR HEAT + COLD
+excluded_lipids <- c(
+  "GL, PL", "Saccharolipids", "FA", "GL", "PL", "Polar lipids",
+  "Total lipids", "NL", "LP", "", "PX", "SL"
+)
+
+res_heat <- run_pipeline_for_stress(combined_data, "Heat", min_studies = 2, excluded = excluded_lipids)
+res_cold <- run_pipeline_for_stress(combined_data, "Cold", min_studies = 2, excluded = excluded_lipids)
+
+# export Table
+tableS5_heat <- res_heat$unmoderated_het %>%
+  transmute(Lipid_class, k, Q, df, Q_pval, I2, tau2, PI_lb, PI_ub)
+write.csv(tableS5_heat, file.path(OUTDIR, "TableS5_heat_corrected.csv"), row.names = FALSE)
+
+tableS5_cold <- res_cold$unmoderated_het %>%
+  transmute(Lipid_class, k, Q, df, Q_pval, I2, tau2, PI_lb, PI_ub)
+write.csv(tableS5_cold, file.path(OUTDIR, "TableS5_cold_corrected.csv"), row.names = FALSE)
+
 
 
 #################Sensitivity test
