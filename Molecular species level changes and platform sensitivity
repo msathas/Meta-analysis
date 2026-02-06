@@ -216,7 +216,7 @@ pooled_results <- df %>%
     )
   )
 
-#write.csv(pooled_results, "POOLED_platform_adjusted_results_lipidclass_mol.csv", row.names = FALSE)
+write.csv(pooled_results, "POOLED_platform_adjusted_results_lipidclass_mol.csv", row.names = FALSE)
 
 #B) Split by platform per key (same 3-step fallback, no platform term)
 fit_one_key_platform_split <- function(d) {
@@ -240,7 +240,7 @@ split_results <- df %>%
   }) %>%
   ungroup()
 
-#write.csv(split_results, "SPLIT_by_platform_results_lipidclass_mol.csv", row.names = FALSE)
+write.csv(split_results, "SPLIT_by_platform_results_lipidclass_mol.csv", row.names = FALSE)
 
 #C) Combine split estimates across platforms (inverse-variance weighting on contrast)
 split_combined <- split_results %>%
@@ -304,57 +304,12 @@ write.csv(compare_by_platform, "COMPARE_by_platform.csv", row.names = FALSE)
 print(compare_summary)
 print(compare_by_platform)
 
-# ----------------------------
-# 4) MAIN PLOT (DI-MS/MS): two bars (Heat, Cold) + star from Heat-Cold contrast
-# ----------------------------
 
-plot_df_DI <- di_results %>%
-  mutate(context_id = row_number()) %>%
-  select(context_id, all_of(key_cols),
-         mu_heat, se_heat, mu_cold, se_cold,
-         p_value, significance) %>%
-  pivot_longer(
-    cols = c(mu_heat, se_heat, mu_cold, se_cold),
-    names_to = c(".value","Treatment"),
-    names_pattern = "(mu|se)_(heat|cold)"
-  ) %>%
-  mutate(
-    Treatment = recode(Treatment, heat="Heat", cold="Cold"),
-    Treatment = factor(Treatment, levels = c("Heat","Cold")),
-    x_label = paste0(Lipid_class, " ", Molecular_species)
-  )
-
-star_df_DI <- plot_df_DI %>%
-  group_by(context_id) %>%
-  summarise(
-    x_label = first(x_label),
-    y_star = max(mu + 1.96*se, na.rm = TRUE) + 0.15,
-    significance = first(significance),
-    .groups = "drop"
-  ) %>%
-  filter(!is.na(significance), significance != "ns")
-
-p <- ggplot(plot_df_DI, aes(x = x_label, y = mu, fill = Treatment)) +
-  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
-  geom_errorbar(aes(ymin = mu - 1.96*se, ymax = mu + 1.96*se),
-                position = position_dodge(width = 0.8), width = 0.2) +
-  geom_text(data = star_df_DI, aes(x = x_label, y = y_star, label = significance),
-            inherit.aes = FALSE, size = 4) +
-  theme_bw() +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
-  labs(x = NULL, y = "Hedges' g (SMDH)", fill = NULL)
-
-print(p)
-ggsave("DI_MSMS_heat_vs_cold_barplot.png", p, width = 14, height = 7, dpi = 300)
-
-# ----------------------------
-# 5) OPTIONAL: flag platform-sensitive keys for supplement
-#    (where pooled vs split-combined disagree strongly)
-# ----------------------------
+#flag platform-sensitive keys for supplement
+#(where pooled vs split-combined disagree strongly)
 platform_sensitivity_tbl <- compare_tbl %>%
   mutate(platform_sensitive = (!sign_match) | (abs_diff > 0.5))
-
-#write.csv(platform_sensitivity_tbl, "PLATFORM_sensitivity_flags.csv", row.names = FALSE)
+write.csv(platform_sensitivity_tbl, "PLATFORM_sensitivity_flags.csv", row.names = FALSE)
 
 platform_sensitivity_tbl %>%
   summarise(
@@ -368,13 +323,3 @@ sens_keys <- platform_sensitivity_tbl %>%
   select(Lipid_class, Molecular_species, diff_pooled, diff_split, abs_diff, sign_match)
 
 write.csv(sens_keys, "platform_sensitive_keys_76.csv", row.names = FALSE)
-
-# optional: attach platform-specific splits for those keys
-sens_keys_by_platform <- split_results %>%
-  semi_join(sens_keys, by=c("Lipid_class","Molecular_species")) %>%
-  select(platform, Lipid_class, Molecular_species,
-         diff_heat_minus_cold, se_diff, model_used,
-         n_heat_studies, n_cold_studies) %>%
-  arrange(Lipid_class, Molecular_species, platform)
-
-write.csv(sens_keys_by_platform, "platform_sensitive_keys.csv", row.names = FALSE)
