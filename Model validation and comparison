@@ -1,0 +1,17 @@
+LOO Model comparison - Model 1 is better
+Model 1 (Random Effects): ELPD = -8625.4 (SE = 133.9)
+Model 2 (Fixed Effects): ELPD = -8635.2 (SE = 134.2)
+Difference: 9.8 ± 5.7 (1.7 standard errors)
+
+Bayes R-square - models performed similarly
+Model 1: R² = 0.0040 (0.40%)
+Model 2: R² = 0.0036 (0.36%)
+
+Pareto k-diagnostics
+Both models <1% problematic observations.
+Model 1- 99.2%
+Model 2 - 99.0%
+
+Variance for model 1 shows appropriate structure with substantial between-study heterogeneity
+
+So, model 1 was chosen.
