@@ -23,50 +23,64 @@ filtered_data_clean <- filtered_data_clean %>%
 filtered_data_clean %>%
   distinct(Lipid_class, Molecular_species)
 
-filtered_data_clean %>%
-  distinct(Lipid_class, Molecular_species, Study) %>%
-  arrange(Lipid_class, Molecular_species) %>%
-  group_by(Lipid_class, Molecular_species) %>%
-  summarise(Studies = paste(unique(Study), collapse = ", "), .groups = "drop")
-
 ############Here, the combinations of lipid class and molecular species that may not have at least one 22C must be removed. This step explicitly need manual curing of data to avoid
 #including the lipids that have more than 2 fatty acid chains that was previously included when 42C was used to filter the lipids.
 
 ##Assuming you have removed misleading lipids
-filtered_data_final <- filtered_data_clean %>%
+meta_data <- filtered_data_clean %>%
   anti_join(excluded_combos, by = c("Lipid_class", "Molecular_species")) %>%
   mutate(
     Carbon_n = as.numeric(sub(":.*", "", Molecular_species))
   )
 
 #Run meta-analysis per group
-meta_results <- filtered_data_final %>%
-  group_by(Lipid_class, Molecular_species, Treatment) %>% #modify the groups based on the analysis of interest. Carbon_n can be included if Carbon_n is specifically analyzed.
-  group_modify(~ {
-    tryCatch({
-      res <- rma(yi, vi, data = .x, method = "REML", random = ~1 | Study)
-      tibble(
-        Lipid_class = .x$Lipid_class[1],
-        Molecular_species = .x$Molecular_species[1],
-        Treatment = .x$Treatment[1],
-        k = res$k,
-        estimate = res$b[1],
-        ci_lb = res$ci.lb,
-        ci_ub = res$ci.ub,
-        pval = res$pval,
-        I2 = res$I2
-      )
-    }, error = function(e) {
-      tibble(
-        Lipid_class = .x$Lipid_class[1],
-        Molecular_species = .x$Molecular_species[1],
-        Treatment = .x$Treatment[1],
-        k = nrow(.x),
-        estimate = NA, ci_lb = NA, ci_ub = NA, pval = NA, I2 = NA
-      )
-    })
-  }) %>%
-  ungroup()
-# Example heatmap of effect sizes
-meta_results <- meta_results %>%
-  mutate(species_treatment = paste(Lipid_class, Molecular_species, Treatment, sep = "_"))
+data_heat <- meta_data %>% filter(Treatment == "Heat") %>% droplevels()
+data_cold <- meta_data %>% filter(Treatment == "Cold") %>% droplevels()
+
+# FIT MODELS
+
+# Settings
+CHAINS <- 4; ITER <- 4000; WARMUP <- 1000; CORES <- 4; SEED <- 123
+
+fit_heat <- brm(
+  yi | se(sqrt(vi)) ~ 1 + (1 | Study) + (1 | Species_ID),
+  data = data_heat, family = gaussian(),
+  prior = c(prior(normal(0, 1), class = "Intercept"), prior(exponential(1), class = "sd")),
+  chains = CHAINS, iter = ITER, warmup = WARMUP, cores = CORES, seed = SEED,
+  backend = "cmdstanr", file = "fit_heat_vlcfa"
+)
+
+fit_cold <- brm(
+  yi | se(sqrt(vi)) ~ 1 + (1 | Study) + (1 | Species_ID),
+  data = data_cold, family = gaussian(),
+  prior = c(prior(normal(0, 1), class = "Intercept"), prior(exponential(1), class = "sd")),
+  chains = CHAINS, iter = ITER, warmup = WARMUP, cores = CORES, seed = SEED,
+  backend = "cmdstanr", file = "fit_cold_vlcfa"
+)
+
+# EXTRACT EFFECTS
+
+extract_effects_fixed <- function(fit, treatment_name) {
+  # Get random effects
+  re <- ranef(fit)$Species_ID
+  
+  effects <- as.data.frame(re[, , "Intercept"]) %>%
+    rownames_to_column("Species_ID") %>%
+    rename(estimate = Estimate, se = Est.Error, ci_lower = Q2.5, ci_upper = Q97.5) %>%
+    # Split the combined ID back into Class and Species
+    separate(Species_ID, into = c("Lipid_class", "Molecular_species"), 
+             sep = ":", remove = FALSE, extra = "merge") %>%
+    mutate(
+      Treatment = treatment_name,
+      p_dir = pmax(1 - pnorm(0, estimate, se), pnorm(0, estimate, se)),
+      direction = ifelse(estimate > 0, "increase", "decrease"),
+      sig_95 = (ci_lower > 0 & ci_upper > 0) | (ci_lower < 0 & ci_upper < 0)
+    )
+  return(effects)
+}
+
+all_results <- bind_rows(
+  extract_effects_fixed(fit_heat, "Heat"),
+  extract_effects_fixed(fit_cold, "Cold")
+)
+
