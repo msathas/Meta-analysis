@@ -206,3 +206,11 @@ L3 <- extract_marginal(
 )
 write_csv(L3, OUT_L3)
 
+# L4: Optional 
+L4 <- extract_marginal(
+  fit,
+  keep_vars = c("plant_species", "Tissue", "Lipid_class"),
+  marginal_vars = c("Growth_stage", "platform"),
+  re_formula_used = ~(1 || plant_species:Tissue:Lipid_class)
+)
+write_csv(L4, OUT_L4)
