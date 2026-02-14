@@ -182,217 +182,177 @@ fit_molecular_species <- function(data, lipid_class, treatment, output_dir) {
   )
 }
 
-# Extract results from fitted model
-extract_molecular_results <- function(fit_obj) {
+# EXTRACT AND SAVE RESULTS
+# Extract results from all fits
+extract_marginal <- function(fit, keep_vars, marginal_vars) {
   
-  if (is.null(fit_obj)) return(NULL)
+  dd <- fit$data
+  vi_ref <- stats::median(dd$vi, na.rm = TRUE)
   
-  fit <- fit_obj$fit
+  # Get unique combinations of variables to keep
+  keep_df <- dd %>% distinct(across(all_of(keep_vars)))
   
-  # Get posterior samples for Molecular_species coefficients
-  posterior_draws <- as_draws_df(fit)
+  # Get unique combinations of variables to marginalize over
+  # Only include variables that exist in the data
+  marginal_vars_present <- intersect(marginal_vars, names(dd))
   
-  # Extract molecular species coefficients (starts with "b_Molecular_species")
-  mol_cols <- grep("^b_Molecular_species[^:]", colnames(posterior_draws), value = TRUE)
-  
-  if (length(mol_cols) == 0) {
-    cat("No molecular species coefficients found.\n")
-    return(NULL)
+  if (length(marginal_vars_present) == 0) {
+    # No marginalization needed
+    marg_df <- tibble(.dummy = 1)
+  } else {
+    marg_df <- dd %>% distinct(across(all_of(marginal_vars_present)))
   }
   
-  # Summarize each molecular species
-  results <- map_dfr(mol_cols, function(col) {
-    samples <- posterior_draws[[col]]
-    
-    # Clean species name
-    species_name <- str_replace(col, "^b_Molecular_species", "")
-    
-    # Posterior summary
-    mean_effect <- mean(samples)
-    median_effect <- median(samples)
-    sd_effect <- sd(samples)
-    
-    # Credible intervals
-    ci_95 <- quantile(samples, probs = c(0.025, 0.975))
-    ci_90 <- quantile(samples, probs = c(0.05, 0.95))
-    
-    # Probability of direction
-    p_positive <- mean(samples > 0)
-    p_negative <- mean(samples < 0)
-    pd <- max(p_positive, p_negative)
-    
-    # Significance
-    significant_95 <- (ci_95[1] > 0 & ci_95[2] > 0) | (ci_95[1] < 0 & ci_95[2] < 0)
-    significant_90 <- (ci_90[1] > 0 & ci_90[2] > 0) | (ci_90[1] < 0 & ci_90[2] < 0)
-    
+  # Create full grid
+  if (".dummy" %in% names(marg_df)) {
+    grid <- keep_df %>% mutate(vi = vi_ref)
+  } else {
+    grid <- tidyr::crossing(keep_df, marg_df) %>%
+      mutate(vi = vi_ref)
+  }
+  
+  # Align factor levels to fit$data (hard fail if mismatch)
+  common <- intersect(names(grid), names(dd))
+  for (v in common) {
+    if (is.factor(dd[[v]])) {
+      grid[[v]] <- factor(as.character(grid[[v]]), levels = levels(dd[[v]]))
+    }
+  }
+  for (v in common) {
+    if (is.factor(dd[[v]]) && any(is.na(grid[[v]]))) {
+      stop("newdata has levels not in fit$data for: ", v)
+    }
+  }
+  
+  # Get posterior predictions
+  lp <- posterior_linpred(
+    fit,
+    newdata = grid,
+    re_formula = NA,  # Population-level only (marginalize over Study random effects)
+    allow_new_levels = FALSE
+  ) # draws × n_grid
+  
+  # Group by keep_vars and average within each group (marginalization)
+  grp <- interaction(grid[, keep_vars, drop = FALSE], drop = TRUE, lex.order = TRUE)
+  idx_list <- split(seq_len(nrow(grid)), grp)
+  
+  lp_marg <- sapply(idx_list, function(idx) rowMeans(lp[, idx, drop = FALSE]))
+  if (is.vector(lp_marg)) lp_marg <- matrix(lp_marg, ncol = 1)
+  
+  # Match back to keep_df
+  keys <- keep_df %>%
+    mutate(.grp = interaction(across(all_of(keep_vars)), drop = TRUE, lex.order = TRUE)) %>%
+    distinct(.grp, .keep_all = TRUE) %>%
+    arrange(match(.grp, colnames(lp_marg))) %>%
+    select(-.grp)
+  
+  # Summarize posterior
+  est      <- apply(lp_marg, 2, mean)
+  se_post  <- apply(lp_marg, 2, sd)
+  q2.5     <- apply(lp_marg, 2, quantile, probs = 0.025)
+  q97.5    <- apply(lp_marg, 2, quantile, probs = 0.975)
+  q5       <- apply(lp_marg, 2, quantile, probs = 0.05)
+  q95      <- apply(lp_marg, 2, quantile, probs = 0.95)
+  prob_pos <- apply(lp_marg, 2, function(x) mean(x > 0))
+  
+  bind_cols(
+    keys,
     tibble(
-      Molecular_species = species_name,
-      mean = mean_effect,
-      median = median_effect,
-      sd = sd_effect,
-      ci_lower_95 = ci_95[1],
-      ci_upper_95 = ci_95[2],
-      ci_lower_90 = ci_90[1],
-      ci_upper_90 = ci_90[2],
-      prob_direction = pd,
-      direction = ifelse(mean_effect > 0, "increase", "decrease"),
-      sig_95 = significant_95,
-      sig_90 = significant_90
-    )
-  })
-  
-  # Add metadata
-  results %>%
-    mutate(
-      Lipid_class = fit_obj$lipid_class,
-      Treatment = fit_obj$treatment,
-      model_used = fit_obj$model_used,
-      n_obs = fit_obj$n_obs,
-      n_studies = fit_obj$n_studies,
-      n_species_total = fit_obj$n_species
-    ) %>%
-    select(Lipid_class, Molecular_species, Treatment, everything())
-}
-
-# RUN ANALYSIS FOR ALL COMBINATIONS
-
-# Get unique lipid classes and treatments
-lipid_classes <- unique(df_aggregated$Lipid_class)
-treatments <- c("Heat", "Cold")
-
-# Create all combinations
-combinations <- expand_grid(
-  lipid_class = lipid_classes,
-  treatment = treatments
-)
-
-cat("\n", rep("#", 80), "\n", sep = "")
-cat("STARTING MOLECULAR SPECIES ANALYSIS FOR", nrow(combinations), "COMBINATIONS\n")
-cat(rep("#", 80), "\n\n")
-
-# Fit models for each combination
-all_fits <- pmap(combinations, function(lipid_class, treatment) {
-  fit_molecular_species(
-    data = df_aggregated,
-    lipid_class = lipid_class,
-    treatment = treatment,
-    output_dir = BASE_DIR
-  )
-})
-
-# Name the list
-names(all_fits) <- paste(combinations$lipid_class, combinations$treatment, sep = "_")
-
-# EXTRACT AND SAVE RESULTS
-
-# Extract results from all fits
-all_results <- map_dfr(all_fits, extract_molecular_results)
-
-if (nrow(all_results) > 0) {
-  
-  # Add significance labels
-  all_results <- all_results %>%
-    mutate(
+      mean = est,
+      se_post = se_post,
+      ci_lower_95 = q2.5,
+      ci_upper_95 = q97.5,
+      ci_lower_90 = q5,
+      ci_upper_90 = q95,
+      prob_pos = prob_pos,
+      prob_direction = pmax(prob_pos, 1 - prob_pos),
+      direction = ifelse(est > 0, "increase", "decrease"),
+      sig_95 = (q2.5 > 0 & q97.5 > 0) | (q2.5 < 0 & q97.5 < 0),
+      sig_90 = (q5 > 0 & q95 > 0) | (q5 < 0 & q95 < 0),
       significance = case_when(
-        sig_95 & prob_direction >= 0.975 ~ "***",  # Very strong
-        sig_95 ~ "**",                              # Strong
-        sig_90 ~ "*",                               # Moderate
+        sig_95 & prob_direction >= 0.975 ~ "***",
+        sig_95 ~ "**",
+        sig_90 ~ "*",
         TRUE ~ "ns"
       )
     )
-  
-  # Save full results
-  write_csv(all_results, file.path(BASE_DIR, "molecular_species_results_ALL.csv"))
-  cat("\nFull results saved to:", file.path(BASE_DIR, "molecular_species_results_ALL.csv"), "\n")
-  
-  # Create summary by lipid class and treatment
-  summary_stats <- all_results %>%
-    group_by(Lipid_class, Treatment) %>%
-    summarise(
-      n_molecular_species = n(),
-      n_increase_sig95 = sum(direction == "increase" & sig_95),
-      n_decrease_sig95 = sum(direction == "decrease" & sig_95),
-      n_increase_sig90 = sum(direction == "increase" & sig_90 & !sig_95),
-      n_decrease_sig90 = sum(direction == "decrease" & sig_90 & !sig_95),
-      n_not_sig = sum(!sig_90),
-      mean_effect = mean(mean),
-      .groups = "drop"
-    )
-  
-  write_csv(summary_stats, file.path(BASE_DIR, "summary_by_lipid_class_treatment.csv"))
-  
-  # Summary by treatment only
-  treatment_summary <- all_results %>%
-    group_by(Treatment) %>%
-    summarise(
-      total_molecular_species = n(),
-      n_increase_sig = sum(direction == "increase" & sig_95),
-      n_decrease_sig = sum(direction == "decrease" & sig_95),
-      pct_increase = round(100 * n_increase_sig / total_molecular_species, 1),
-      pct_decrease = round(100 * n_decrease_sig / total_molecular_species, 1),
-      .groups = "drop"
-    )
-  
-  write_csv(treatment_summary, file.path(BASE_DIR, "summary_by_treatment.csv"))
-  
-  # Print summaries
-  cat("\n", rep("=", 80), "\n", sep = "")
-  cat("SUMMARY BY LIPID CLASS AND TREATMENT\n")
-  cat(rep("=", 80), "\n\n")
-  print(summary_stats, n = Inf)
-  
-  cat("\n", rep("=", 80), "\n", sep = "")
-  cat("SUMMARY BY TREATMENT\n")
-  cat(rep("=", 80), "\n\n")
-  print(treatment_summary)
-  
-  # Create lists of top changing molecular species
-  top_increase_heat <- all_results %>%
-    filter(Treatment == "Heat", sig_95 == TRUE, direction == "increase") %>%
-    arrange(desc(mean)) %>%
-    select(Lipid_class, Molecular_species, mean, ci_lower_95, ci_upper_95, significance) %>%
-    head(20)
-  
-  top_decrease_heat <- all_results %>%
-    filter(Treatment == "Heat", sig_95 == TRUE, direction == "decrease") %>%
-    arrange(mean) %>%
-    select(Lipid_class, Molecular_species, mean, ci_lower_95, ci_upper_95, significance) %>%
-    head(20)
-  
-  top_increase_cold <- all_results %>%
-    filter(Treatment == "Cold", sig_95 == TRUE, direction == "increase") %>%
-    arrange(desc(mean)) %>%
-    select(Lipid_class, Molecular_species, mean, ci_lower_95, ci_upper_95, significance) %>%
-    head(20)
-  
-  top_decrease_cold <- all_results %>%
-    filter(Treatment == "Cold", sig_95 == TRUE, direction == "decrease") %>%
-    arrange(mean) %>%
-    select(Lipid_class, Molecular_species, mean, ci_lower_95, ci_upper_95, significance) %>%
-    head(20)
-  
-  write_csv(top_increase_heat, file.path(BASE_DIR, "top20_increase_HEAT.csv"))
-  write_csv(top_decrease_heat, file.path(BASE_DIR, "top20_decrease_HEAT.csv"))
-  write_csv(top_increase_cold, file.path(BASE_DIR, "top20_increase_COLD.csv"))
-  write_csv(top_decrease_cold, file.path(BASE_DIR, "top20_decrease_COLD.csv"))
-  
-  cat("\n", rep("=", 80), "\n", sep = "")
-  cat("TOP 20 MOLECULAR SPECIES - HEAT STRESS\n")
-  cat(rep("=", 80), "\n\n")
-  cat("INCREASED:\n")
-  print(top_increase_heat, n = 20)
-  cat("\nDECREASED:\n")
-  print(top_decrease_heat, n = 20)
-  
-  cat("\n", rep("=", 80), "\n", sep = "")
-  cat("TOP 20 MOLECULAR SPECIES - COLD STRESS\n")
-  cat(rep("=", 80), "\n\n")
-  cat("INCREASED:\n")
-  print(top_increase_cold, n = 20)
-  cat("\nDECREASED:\n")
-  print(top_decrease_cold, n = 20)
-  
-} else {
-  cat("\nNo results to save.\n")
+  )
 }
 
+# Process each fitted model
+
+all_results <- list()
+
+for (model_dir in model_dirs) {
+  
+  # Extract lipid class and treatment from directory name
+  dir_name <- basename(model_dir)
+  parts <- strsplit(dir_name, "_")[[1]]
+  
+  # Assume format: LipidClass_Treatment
+  if (length(parts) < 2) {
+    cat("Skipping", dir_name, "(unexpected format)\n")
+    next
+  }
+  
+  treatment <- parts[length(parts)]
+  lipid_class <- paste(parts[1:(length(parts)-1)], collapse = "_")
+  
+  fitfile <- file.path(model_dir, "fitted_model.rds")
+  
+  cat("\n", rep("-", 80), "\n", sep = "")
+  cat("Processing:", lipid_class, "|", treatment, "\n")
+  cat(rep("-", 80), "\n")
+  
+  # Load fit
+  fit <- tryCatch({
+    readRDS(fitfile)
+  }, error = function(e) {
+    cat("Failed to load:", fitfile, "\n")
+    NULL
+  })
+  
+  if (is.null(fit)) next
+  if (posterior::ndraws(as_draws(fit)) <= 0) {
+    cat("No posterior draws. Skipping.\n")
+    next
+  }
+  
+  # Check which variables exist in the model
+  dd <- fit$data
+  possible_marginal <- c("Tissue", "Growth_stage", "platform", "plant_species")
+  marginal_vars <- intersect(possible_marginal, names(dd))
+  
+  cat("Marginalizing over:", paste(marginal_vars, collapse = ", "), "\n")
+  
+  # Extract marginal estimates for Molecular_species
+  results <- tryCatch({
+    extract_marginal(
+      fit,
+      keep_vars = "Molecular_species",
+      marginal_vars = marginal_vars
+    )
+  }, error = function(e) {
+    cat("Extraction failed:", conditionMessage(e), "\n")
+    NULL
+  })
+  
+  if (is.null(results)) next
+  
+  # Add metadata
+  results <- results %>%
+    mutate(
+      Lipid_class = lipid_class,
+      Treatment = treatment,
+      .before = 1
+    )
+  
+  cat("Extracted", nrow(results), "molecular species\n")
+  
+  # Save individual file
+  outfile <- file.path(model_dir, "molecular_species_MARGINAL.csv")
+  write_csv(results, outfile)
+  cat("Saved:", outfile, "\n")
+  
+  all_results[[dir_name]] <- results
+}
