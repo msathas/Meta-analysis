@@ -1,60 +1,398 @@
-#######Modeling and normality check for analysis at the molecular species level 
+####### Analysis at the molecular species level 
 
 # Assuming the input is combined_data
-# Modeling is done per lipid class per molecular species separately
-
-# Create group_id combining Lipid_class and Molecular_species
-combined_data <- combined_data %>%
-  mutate(group_id = paste(Lipid_class, Molecular_species, sep = "_"))
-
-# Get unique groups
-groups <- unique(combined_data$group_id)
-
-cat("Total groups to fit:", length(groups), "\n")
-
-# Prepare empty list to store results
-results_list <- list()
-
-# Loop over groups to fit Bayesian meta-analysis models
-for (g in groups) {
-  cat("Fitting model for group:", g, "\n")
-
-  dat_sub <- combined_data %>% filter(group_id == g)
-
-  # Skip groups without both treatments (Heat and Cold)
-  if(length(unique(dat_sub$Treatment)) < 2) next
-
-  fit <- brm(
-    formula = yi | se(sqrt(vi)) ~ Treatment + (1 | Study),
-    data = dat_sub,
-    prior = c(
-      prior(normal(0, 1), class = "Intercept"),
-      prior(cauchy(0, 1), class = "sd")
-    ),
-    chains = 4,
-    iter = 2000,
-    warmup = 500,
-    cores = 4,
-    control = list(adapt_delta = 0.95),
-    silent = TRUE,
-    refresh = 0
+# Fit one Lipid_class × Treatment combination with fallback
+fit_molecular_species <- function(data, lipid_class, treatment, output_dir) {
+  
+  cat("\n", rep("=", 80), "\n", sep = "")
+  cat("Fitting:", lipid_class, "|", treatment, "\n")
+  cat(rep("=", 80), "\n")
+  
+  # Filter to specific combination
+  d <- data %>%
+    filter(Lipid_class == lipid_class, Treatment == treatment) %>%
+    mutate(
+      Study = factor(Study),
+      platform = factor(platform),
+      Molecular_species = factor(Molecular_species),
+      Tissue = factor(Tissue),
+      Growth_stage = factor(Growth_stage),
+      plant_species = factor(plant_species)
+    ) %>%
+    droplevels()
+  
+  if (nrow(d) == 0) {
+    cat("No data available. Skipping.\n")
+    return(NULL)
+  }
+  
+  # Data summary
+  n_studies <- n_distinct(d$Study)
+  n_species <- n_distinct(d$Molecular_species)
+  n_obs <- nrow(d)
+  
+  cat("N observations:", n_obs, "\n")
+  cat("N studies:", n_studies, "\n")
+  cat("N molecular species:", n_species, "\n")
+  cat("N platforms:", n_distinct(d$platform), "\n")
+  cat("N plant species:", n_distinct(d$plant_species), "\n")
+  cat("N tissues:", n_distinct(d$Tissue), "\n")
+  cat("N growth stages:", n_distinct(d$Growth_stage), "\n\n")
+  
+  # Check if we have enough data
+  if (n_studies < 2) {
+    cat("Not enough studies (need >= 2). Skipping.\n")
+    return(NULL)
+  }
+  
+  if (n_species < 2) {
+    cat("Not enough molecular species (need >= 2). Skipping.\n")
+    return(NULL)
+  }
+  
+  # Save cleaned data
+  outdir <- file.path(output_dir, paste0(lipid_class, "_", treatment))
+  dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+  write_csv(d, file.path(outdir, "model_input_data.csv"))
+  
+  # ---- Model formulas with fallback hierarchy ----
+  # M1: Full model with all covariates
+  f1 <- bf(
+    yi | se(sqrt(vi)) ~ 0 +
+      Molecular_species +
+      Tissue +
+      Growth_stage +
+      platform +
+      plant_species +
+      (1 | Study)  
   )
 
-  summ <- summary(fit)$fixed
-  treat_row <- summ[rownames(summ) == "TreatmentHeat", ]
+  # M2: Drop Growth_stage
+  f2 <- bf(
+    yi | se(sqrt(vi)) ~ 0 +
+      Molecular_species +
+      Tissue +
+      platform +
+      plant_species +
+      (1 | Study)
+  )
 
-  results_list[[g]] <- data.frame(
-    group = g,
-    estimate = treat_row["Estimate"],
-    se = treat_row["Est.Error"],
-    lower95 = treat_row["l-95% CI"],
-    upper95 = treat_row["u-95% CI"],
-    significant = ifelse(treat_row["l-95% CI"] > 0 | treat_row["u-95% CI"] < 0, TRUE, FALSE)
+  # M3: Drop Tissue
+  f3 <- bf(
+    yi | se(sqrt(vi)) ~ 0 +
+      Molecular_species +
+      platform +
+      Tissue +
+      (1 | Study)
+  )
+
+  # M4: Drop plant_species (minimal model)
+  f4 <- bf(
+    yi | se(sqrt(vi)) ~ 0 +
+      Molecular_species +
+      platform +
+      (1 | Study)  
+  )
+  
+  # Fallback list
+  models <- list(
+    M1_full = f1,
+    M2_no_growth = f2,
+    M3_plant = f3,
+    M4_minimal = f4
+  )
+  
+  # Priors (same as lipid class)
+  priors <- c(
+    prior(normal(0, 1), class = "b"),
+    prior(exponential(1), class = "sd")
+  )
+  
+  # Try fitting with fallback
+  fit <- NULL
+  model_used <- NULL
+  
+  for (model_name in names(models)) {
+    cat("\nAttempting", model_name, "...\n")
+    
+    fit <- tryCatch({
+      brm(
+        formula = models[[model_name]],
+        data = d,
+        family = gaussian(),
+        prior = priors,
+        chains = CHAINS,
+        iter = ITER,
+        warmup = WARMUP,
+        cores = CORES,
+        backend = "cmdstanr",
+        init = INIT_VAL,
+        control = list(adapt_delta = ADAPT_DELTA, max_treedepth = MAX_TREED),
+        seed = SEED,
+        refresh = 50,
+        file_refit = "never"
+      )
+    }, error = function(e) {
+      cat("FAILED:", conditionMessage(e), "\n")
+      NULL
+    })
+    
+    if (!is.null(fit)) {
+      model_used <- model_name
+      cat("SUCCESS with", model_name, "\n")
+      break
+    }
+  }
+  
+  if (is.null(fit)) {
+    cat("All models failed to converge.\n")
+    return(NULL)
+  }
+  
+  # Save fit
+  saveRDS(fit, file.path(outdir, "fitted_model.rds"))
+  
+  # Diagnostics
+  dr <- as_draws_array(fit)
+  ess_tbl <- tibble(parameter = posterior::variables(dr)) %>%
+    rowwise() %>%
+    mutate(
+      bulk_ess = posterior::ess_bulk(dr[, , parameter, drop = FALSE])[[1]],
+      tail_ess = posterior::ess_tail(dr[, , parameter, drop = FALSE])[[1]],
+      rhat     = posterior::rhat(dr[, , parameter, drop = FALSE])[[1]]
+    ) %>%
+    ungroup()
+  
+  write_csv(ess_tbl, file.path(outdir, "diagnostics_ESS_Rhat.csv"))
+  
+  # Summary
+  sink(file.path(outdir, "model_summary.txt"))
+  print(summary(fit))
+  sink()
+  
+  # Return metadata
+  list(
+    fit = fit,
+    model_used = model_used,
+    lipid_class = lipid_class,
+    treatment = treatment,
+    n_obs = n_obs,
+    n_studies = n_studies,
+    n_species = n_species
   )
 }
 
-# Combine all results into one dataframe
-results_df <- bind_rows(results_list)
+# Extract results from fitted model
+extract_molecular_results <- function(fit_obj) {
+  
+  if (is.null(fit_obj)) return(NULL)
+  
+  fit <- fit_obj$fit
+  
+  # Get posterior samples for Molecular_species coefficients
+  posterior_draws <- as_draws_df(fit)
+  
+  # Extract molecular species coefficients (starts with "b_Molecular_species")
+  mol_cols <- grep("^b_Molecular_species[^:]", colnames(posterior_draws), value = TRUE)
+  
+  if (length(mol_cols) == 0) {
+    cat("No molecular species coefficients found.\n")
+    return(NULL)
+  }
+  
+  # Summarize each molecular species
+  results <- map_dfr(mol_cols, function(col) {
+    samples <- posterior_draws[[col]]
+    
+    # Clean species name
+    species_name <- str_replace(col, "^b_Molecular_species", "")
+    
+    # Posterior summary
+    mean_effect <- mean(samples)
+    median_effect <- median(samples)
+    sd_effect <- sd(samples)
+    
+    # Credible intervals
+    ci_95 <- quantile(samples, probs = c(0.025, 0.975))
+    ci_90 <- quantile(samples, probs = c(0.05, 0.95))
+    
+    # Probability of direction
+    p_positive <- mean(samples > 0)
+    p_negative <- mean(samples < 0)
+    pd <- max(p_positive, p_negative)
+    
+    # Significance
+    significant_95 <- (ci_95[1] > 0 & ci_95[2] > 0) | (ci_95[1] < 0 & ci_95[2] < 0)
+    significant_90 <- (ci_90[1] > 0 & ci_90[2] > 0) | (ci_90[1] < 0 & ci_90[2] < 0)
+    
+    tibble(
+      Molecular_species = species_name,
+      mean = mean_effect,
+      median = median_effect,
+      sd = sd_effect,
+      ci_lower_95 = ci_95[1],
+      ci_upper_95 = ci_95[2],
+      ci_lower_90 = ci_90[1],
+      ci_upper_90 = ci_90[2],
+      prob_direction = pd,
+      direction = ifelse(mean_effect > 0, "increase", "decrease"),
+      sig_95 = significant_95,
+      sig_90 = significant_90
+    )
+  })
+  
+  # Add metadata
+  results %>%
+    mutate(
+      Lipid_class = fit_obj$lipid_class,
+      Treatment = fit_obj$treatment,
+      model_used = fit_obj$model_used,
+      n_obs = fit_obj$n_obs,
+      n_studies = fit_obj$n_studies,
+      n_species_total = fit_obj$n_species
+    ) %>%
+    select(Lipid_class, Molecular_species, Treatment, everything())
+}
 
-# Save results to CSV
-write_csv(results_df, "bayesian_meta_results.csv")
+# RUN ANALYSIS FOR ALL COMBINATIONS
+
+# Get unique lipid classes and treatments
+lipid_classes <- unique(df_aggregated$Lipid_class)
+treatments <- c("Heat", "Cold")
+
+# Create all combinations
+combinations <- expand_grid(
+  lipid_class = lipid_classes,
+  treatment = treatments
+)
+
+cat("\n", rep("#", 80), "\n", sep = "")
+cat("STARTING MOLECULAR SPECIES ANALYSIS FOR", nrow(combinations), "COMBINATIONS\n")
+cat(rep("#", 80), "\n\n")
+
+# Fit models for each combination
+all_fits <- pmap(combinations, function(lipid_class, treatment) {
+  fit_molecular_species(
+    data = df_aggregated,
+    lipid_class = lipid_class,
+    treatment = treatment,
+    output_dir = BASE_DIR
+  )
+})
+
+# Name the list
+names(all_fits) <- paste(combinations$lipid_class, combinations$treatment, sep = "_")
+
+# EXTRACT AND SAVE RESULTS
+
+# Extract results from all fits
+all_results <- map_dfr(all_fits, extract_molecular_results)
+
+if (nrow(all_results) > 0) {
+  
+  # Add significance labels
+  all_results <- all_results %>%
+    mutate(
+      significance = case_when(
+        sig_95 & prob_direction >= 0.975 ~ "***",  # Very strong
+        sig_95 ~ "**",                              # Strong
+        sig_90 ~ "*",                               # Moderate
+        TRUE ~ "ns"
+      )
+    )
+  
+  # Save full results
+  write_csv(all_results, file.path(BASE_DIR, "molecular_species_results_ALL.csv"))
+  cat("\nFull results saved to:", file.path(BASE_DIR, "molecular_species_results_ALL.csv"), "\n")
+  
+  # Create summary by lipid class and treatment
+  summary_stats <- all_results %>%
+    group_by(Lipid_class, Treatment) %>%
+    summarise(
+      n_molecular_species = n(),
+      n_increase_sig95 = sum(direction == "increase" & sig_95),
+      n_decrease_sig95 = sum(direction == "decrease" & sig_95),
+      n_increase_sig90 = sum(direction == "increase" & sig_90 & !sig_95),
+      n_decrease_sig90 = sum(direction == "decrease" & sig_90 & !sig_95),
+      n_not_sig = sum(!sig_90),
+      mean_effect = mean(mean),
+      .groups = "drop"
+    )
+  
+  write_csv(summary_stats, file.path(BASE_DIR, "summary_by_lipid_class_treatment.csv"))
+  
+  # Summary by treatment only
+  treatment_summary <- all_results %>%
+    group_by(Treatment) %>%
+    summarise(
+      total_molecular_species = n(),
+      n_increase_sig = sum(direction == "increase" & sig_95),
+      n_decrease_sig = sum(direction == "decrease" & sig_95),
+      pct_increase = round(100 * n_increase_sig / total_molecular_species, 1),
+      pct_decrease = round(100 * n_decrease_sig / total_molecular_species, 1),
+      .groups = "drop"
+    )
+  
+  write_csv(treatment_summary, file.path(BASE_DIR, "summary_by_treatment.csv"))
+  
+  # Print summaries
+  cat("\n", rep("=", 80), "\n", sep = "")
+  cat("SUMMARY BY LIPID CLASS AND TREATMENT\n")
+  cat(rep("=", 80), "\n\n")
+  print(summary_stats, n = Inf)
+  
+  cat("\n", rep("=", 80), "\n", sep = "")
+  cat("SUMMARY BY TREATMENT\n")
+  cat(rep("=", 80), "\n\n")
+  print(treatment_summary)
+  
+  # Create lists of top changing molecular species
+  top_increase_heat <- all_results %>%
+    filter(Treatment == "Heat", sig_95 == TRUE, direction == "increase") %>%
+    arrange(desc(mean)) %>%
+    select(Lipid_class, Molecular_species, mean, ci_lower_95, ci_upper_95, significance) %>%
+    head(20)
+  
+  top_decrease_heat <- all_results %>%
+    filter(Treatment == "Heat", sig_95 == TRUE, direction == "decrease") %>%
+    arrange(mean) %>%
+    select(Lipid_class, Molecular_species, mean, ci_lower_95, ci_upper_95, significance) %>%
+    head(20)
+  
+  top_increase_cold <- all_results %>%
+    filter(Treatment == "Cold", sig_95 == TRUE, direction == "increase") %>%
+    arrange(desc(mean)) %>%
+    select(Lipid_class, Molecular_species, mean, ci_lower_95, ci_upper_95, significance) %>%
+    head(20)
+  
+  top_decrease_cold <- all_results %>%
+    filter(Treatment == "Cold", sig_95 == TRUE, direction == "decrease") %>%
+    arrange(mean) %>%
+    select(Lipid_class, Molecular_species, mean, ci_lower_95, ci_upper_95, significance) %>%
+    head(20)
+  
+  write_csv(top_increase_heat, file.path(BASE_DIR, "top20_increase_HEAT.csv"))
+  write_csv(top_decrease_heat, file.path(BASE_DIR, "top20_decrease_HEAT.csv"))
+  write_csv(top_increase_cold, file.path(BASE_DIR, "top20_increase_COLD.csv"))
+  write_csv(top_decrease_cold, file.path(BASE_DIR, "top20_decrease_COLD.csv"))
+  
+  cat("\n", rep("=", 80), "\n", sep = "")
+  cat("TOP 20 MOLECULAR SPECIES - HEAT STRESS\n")
+  cat(rep("=", 80), "\n\n")
+  cat("INCREASED:\n")
+  print(top_increase_heat, n = 20)
+  cat("\nDECREASED:\n")
+  print(top_decrease_heat, n = 20)
+  
+  cat("\n", rep("=", 80), "\n", sep = "")
+  cat("TOP 20 MOLECULAR SPECIES - COLD STRESS\n")
+  cat(rep("=", 80), "\n\n")
+  cat("INCREASED:\n")
+  print(top_increase_cold, n = 20)
+  cat("\nDECREASED:\n")
+  print(top_decrease_cold, n = 20)
+  
+} else {
+  cat("\nNo results to save.\n")
+}
+
