@@ -94,15 +94,13 @@ sink()
 cat("DONE. Cold pooled fit saved to:", normalizePath(OUTDIR), "\n")
 
 
-# ----------------------------
-# Load fit
-# ----------------------------
+# Posterior estimate extraction
+
 fit <- readRDS(FITFILE)
 if (posterior::ndraws(as_draws(fit)) <= 0) stop("Fit has no posterior draws: ", FITFILE)
 
-# ----------------------------
+
 # Core extractor (platform/stage marginalization is controlled by marginal_vars)
-# ----------------------------
 extract_marginal <- function(fit, keep_vars, marginal_vars, re_formula_used = NA) {
   dd <- fit$data
   vi_ref <- stats::median(dd$vi, na.rm = TRUE)
