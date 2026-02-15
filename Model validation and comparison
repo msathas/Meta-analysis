@@ -1,3 +1,20 @@
+## Model 1
+
+
+## Model 2
+fit2 <- bf(
+  yi | se(sqrt(vi)) ~ 0 +
+    Lipid_class +
+    Lipid_class:Tissue +
+    Lipid_class:Growth_stage +
+    platform +
+    (1 | Study) +
+    Lipid_class:plant_species +
+    Lipid_class:Tissue:plant_species
+)
+
+
+## Results
 LOO Model comparison - Model 1 is better
 Model 1 (Random Effects): ELPD = -8625.4 (SE = 133.9)
 Model 2 (Fixed Effects): ELPD = -8635.2 (SE = 134.2)
