@@ -43,7 +43,7 @@ data_cold <- meta_data %>% filter(Treatment == "Cold") %>% droplevels()
 CHAINS <- 4; ITER <- 4000; WARMUP <- 1000; CORES <- 4; SEED <- 123
 
 fit_heat <- brm(
-  yi | se(sqrt(vi)) ~ 1 + (1 | Study) + (1 | Species_ID),
+  yi | se(sqrt(vi)) ~ 1 + (1 | Study) + (1 | Species_ID),  #this is because of highly sparse VLCFA data
   data = data_heat, family = gaussian(),
   prior = c(prior(normal(0, 1), class = "Intercept"), prior(exponential(1), class = "sd")),
   chains = CHAINS, iter = ITER, warmup = WARMUP, cores = CORES, seed = SEED,
@@ -51,7 +51,7 @@ fit_heat <- brm(
 )
 
 fit_cold <- brm(
-  yi | se(sqrt(vi)) ~ 1 + (1 | Study) + (1 | Species_ID),
+  yi | se(sqrt(vi)) ~ 1 + (1 | Study) + (1 | Species_ID),  #this is because of highly sparse VLCFA data
   data = data_cold, family = gaussian(),
   prior = c(prior(normal(0, 1), class = "Intercept"), prior(exponential(1), class = "sd")),
   chains = CHAINS, iter = ITER, warmup = WARMUP, cores = CORES, seed = SEED,
