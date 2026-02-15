@@ -1,5 +1,5 @@
 ## Model 1
-f_pooled <- bf(
+fit1 <- bf(
   yi | se(sqrt(vi)) ~ 0 +
     Lipid_class +               
     Lipid_class:Tissue +         
