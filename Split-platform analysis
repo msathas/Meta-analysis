@@ -1,4 +1,4 @@
-# Split-platform includes the same method as "Bayesian modeling for lipid class response" with the following change
+# Split-platform analysis for lipid class response includes the same method as "Bayesian modeling for lipid class response" with the following change
 
 # platform was removed from the model and the model was fit per platform.
 # Similar posterior estimate extraction as pooled analysis
@@ -84,3 +84,6 @@ for (p in platforms) {
 }
 
 cat("ALL DONE. Outputs in:", normalizePath(OUTDIR), "\n")
+
+
+# Similarly, split-platform analysis for molecular response was done with the base model from "Bayesian modeling for molecular species response".
