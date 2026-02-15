@@ -1,1 +1,86 @@
+# Split-platform includes the same method as "Bayesian modeling for lipid class response" with the following change
 
+# platform was removed from the model and the model was fit per platform.
+# Similar posterior estimate extraction as pooled analysis
+
+# here is an example with heat stress data
+
+# Split model (platform removed)
+f_split <- bf(
+  yi | se(sqrt(vi)) ~ 0 +
+    Lipid_class +
+    Lipid_class:Tissue +
+    Lipid_class:Growth_stage +
+    (1 | Study) +
+    (0 + Lipid_class || plant_species) +
+    (1 || plant_species:Tissue:Lipid_class)
+)
+
+priors <- c(
+  prior(normal(0, 1), class = "b"),
+  prior(exponential(1), class = "sd")
+)
+
+# Fit per platform
+platforms <- levels(df0$platform)
+
+for (p in platforms) {
+  d <- df0 %>% filter(platform == p) %>% droplevels()
+
+  n_rows <- nrow(d)
+  n_st   <- dplyr::n_distinct(d$Study)
+
+  # Only check MIN_STUDIES (rows don't matter after aggregation)
+  if (n_st < MIN_STUDIES) {
+    cat(sprintf("SKIP platform=%s (rows=%d, studies=%d) - need %d+ studies\n", 
+                p, n_rows, n_st, MIN_STUDIES))
+    next
+  }
+
+  tag <- paste0("heat_split_", make.names(p))
+  od  <- file.path(OUTDIR, tag)
+  dir.create(od, showWarnings = FALSE, recursive = TRUE)
+
+  # platform-specific temp dir reduces filesystem contention
+  Sys.setenv(TMPDIR = file.path(od, "tmp"))
+  dir.create(Sys.getenv("TMPDIR"), showWarnings = FALSE, recursive = TRUE)
+
+  cat(sprintf("FITTING platform=%s (rows=%d, studies=%d)\n", p, n_rows, n_st))
+
+  fit <- brm(
+    formula = f_split,
+    data = d,
+    family = gaussian(),
+    prior = priors,
+    chains = CHAINS, iter = ITER, warmup = WARMUP, cores = CORES,
+    backend = "cmdstanr",
+    init = INIT_VAL,
+    control = list(adapt_delta = ADAPT_DELTA, max_treedepth = MAX_TREED),
+    seed = SEED,
+    refresh = 50,
+    file_refit = "never",
+    file = file.path(od, paste0("fit_", tag))   # caches compile+fit per platform
+  )
+
+  saveRDS(fit, file.path(od, paste0("fit_", tag, ".rds")))
+
+  dr <- as_draws_array(fit)
+  ess_tbl <- tibble(parameter = posterior::variables(dr)) %>%
+    rowwise() %>%
+    mutate(
+      bulk_ess = posterior::ess_bulk(dr[, , parameter, drop = FALSE])[[1]],
+      tail_ess = posterior::ess_tail(dr[, , parameter, drop = FALSE])[[1]],
+      rhat     = posterior::rhat(dr[, , parameter, drop = FALSE])[[1]]
+    ) %>%
+    ungroup()
+
+  write_csv(ess_tbl, file.path(od, paste0("diagnostics_ESS_Rhat_", tag, ".csv")))
+
+  sink(file.path(od, paste0("model_summary_", tag, ".txt")))
+  print(summary(fit))
+  sink()
+
+  cat(sprintf("DONE platform=%s -> %s\n", p, normalizePath(od)))
+}
+
+cat("ALL DONE. Outputs in:", normalizePath(OUTDIR), "\n")
