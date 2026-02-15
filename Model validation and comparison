@@ -22,7 +22,6 @@ fit2 <- bf(
     Lipid_class:Tissue:plant_species
 )
 
-
 ## Results
 LOO Model comparison - Model 1 is better
 Model 1 (Random Effects): ELPD = -8625.4 (SE = 133.9)
