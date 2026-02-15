@@ -1,5 +1,14 @@
 ## Model 1
-
+f_pooled <- bf(
+  yi | se(sqrt(vi)) ~ 0 +
+    Lipid_class +               
+    Lipid_class:Tissue +         
+    Lipid_class:Growth_stage +   
+    platform +                   
+    (1 | Study) +                  
+    (0 + Lipid_class || plant_species) +   
+    (1 || plant_species:Tissue:Lipid_class)
+)
 
 ## Model 2
 fit2 <- bf(
@@ -32,3 +41,5 @@ Model 2 - 99.0%
 Variance for model 1 shows appropriate structure with substantial between-study heterogeneity
 
 So, model 1 was chosen.
+
+######## Similarly, prior testing was done and validated.
