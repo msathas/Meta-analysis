@@ -3,9 +3,9 @@
 This repository contains R code for performing a comprehensive meta-analysis of plant lipidomic responses to temperature stress (heat and cold). The focus is on heterogeneity and sensitivity analysis, lipid class–specific and molecular species–level modeling. Very-long-chain fatty acids (VLCFAs) are also given special consideration.
 
 
-##Repository Structure
+## Repository Structure
 
-##Main Features
+## Main Features
 
 ### Effect size calculation
 - Loads data, followed by data cleaning
@@ -30,7 +30,7 @@ This repository contains R code for performing a comprehensive meta-analysis of 
 - Special module to explore the role of "very-long-chain fatty acids (≥C22)"
 - Distribution trends and treatment effects highlighted
 
-##AI has been used only to help with codes
+#AI has been used only to help with codes
 
 ---
 
