@@ -40,3 +40,6 @@ Install these R packages before running the scripts:
 install.packages(c(
   "tidyverse", "brms", "metafor", "dplyr", "tibble", "readr", "ggplot2", "tidyr", "purrr", "stringr", "posterior"
 ))
+
+
+## AI has been used only to help with codes
