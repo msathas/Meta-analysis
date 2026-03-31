@@ -3,8 +3,10 @@ library(tidyverse)
 library(brms)
 library(posterior)
 
-#This analysis was done per treatment. Assuming the input data are cold_data and heat_data, respectively.
-#Repeat the following steps for heat_data as well.
+#This analysis was done per treatment. The below code was used for cold stress data.
+#The analysis was done in multiple steps such as, data preparation and hormonization (manual), fitting the model, and posterior estimate extraction.
+#The data preparation and harmonization involves extracting data from the literature (as described in the Manuscript) and organizing the data.
+#For heat stress data, same code was used with appropriate dataset.
 
 BASE_DIR <- "Final_meta_outputs"
 INFILE   <- file.path(BASE_DIR, "Cold_model_input.csv")
