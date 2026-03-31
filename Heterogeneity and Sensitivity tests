@@ -1,6 +1,5 @@
 ###############Heterogeneity test
-##Separately for heat_data and cold_data (Treatment wise)
-
+#The below code was run separately for heat and cold stress datasets (Treatment wise).
 
 #HETEROGENEITY PER LIPID CLASS (UNMODERATED)
 
@@ -175,13 +174,9 @@ run_pipeline_for_stress <- function(df, stress_label, min_studies = 2, excluded 
 
 
 #RUN FOR HEAT + COLD
-excluded_lipids <- c(
-  "GL, PL", "Saccharolipids", "FA", "GL", "PL", "Polar lipids",
-  "Total lipids", "NL", "LP", "", "PX", "SL"
-)
 
-res_heat <- run_pipeline_for_stress(combined_data, "Heat", min_studies = 2, excluded = excluded_lipids)
-res_cold <- run_pipeline_for_stress(combined_data, "Cold", min_studies = 2, excluded = excluded_lipids)
+res_heat <- run_pipeline_for_stress(combined_data, "Heat", min_studies = 2)
+res_cold <- run_pipeline_for_stress(combined_data, "Cold", min_studies = 2)
 
 # export Table
 tableS5_heat <- res_heat$unmoderated_het %>%
@@ -195,8 +190,9 @@ write.csv(tableS5_cold, file.path(OUTDIR, "TableS5_cold_corrected.csv"), row.nam
 
 
 #################Sensitivity test
-#Assuming input data is heat_data
-# Optional: Sensitivity
+#The below code was run separately for heat and cold stress datasets (Treatment wise). 
+#Here, assuming input data is heat_data
+
 leave1out_mv <- function(data, study_col = "Study") {
   unique_studies <- unique(data[[study_col]])
   results <- lapply(unique_studies, function(study) {
