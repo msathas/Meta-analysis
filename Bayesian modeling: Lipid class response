@@ -176,7 +176,7 @@ extract_marginal <- function(fit, keep_vars, marginal_vars, re_formula_used = NA
   )
 }
 
-# L1: Lipid_class (platform + stage marginalized)
+# L1: Lipid_class (platform + plant species + Tissue marginalized)
 L1 <- extract_marginal(
   fit,
   keep_vars = c("Lipid_class"),
@@ -185,7 +185,7 @@ L1 <- extract_marginal(
 )
 write_csv(L1, OUT_L1)
 
-# L2: plant_species × Lipid_class (platform + stage marginalized)
+# L2: plant_species × Lipid_class (platform + Tissue marginalized)
 # include plant_species lipid random slopes
 L2 <- extract_marginal(
   fit,
@@ -195,7 +195,7 @@ L2 <- extract_marginal(
 )
 write_csv(L2, OUT_L2)
 
-# L3: Tissue × Lipid_class (platform + stage marginalized)
+# L3: Tissue × Lipid_class (platform + plant species marginalized)
 L3 <- extract_marginal(
   fit,
   keep_vars = c("Tissue", "Lipid_class"),
@@ -204,7 +204,7 @@ L3 <- extract_marginal(
 )
 write_csv(L3, OUT_L3)
 
-# L4: Optional 
+# L4: plant_species x Tissue x Lipid_class (platform marginalized) 
 L4 <- extract_marginal(
   fit,
   keep_vars = c("plant_species", "Tissue", "Lipid_class"),
