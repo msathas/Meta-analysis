@@ -87,3 +87,102 @@ cat("ALL DONE. Outputs in:", normalizePath(OUTDIR), "\n")
 
 
 # Similarly, split-platform analysis for molecular response was done with the base model from "Bayesian modeling for molecular species response".
+
+
+######### Cross-platform consistency check
+## This was also done per treatment(or stress)
+## The below code was for cold stress data
+STRESS      <- "Cold"  
+MIN_N_COR   <- 5L       # minimum overlap rows to attempt cor.test()
+BASE_DIR    <- "Final_meta_outputs_agg"
+SPLITDIR    <- file.path(BASE_DIR, paste0("bayes_fit_", STRESS, "_splitByPlatform"))
+if (!dir.exists(SPLITDIR)) stop("Missing directory: ", SPLITDIR)
+
+IN_L1 <- file.path(SPLITDIR, paste0("split_L1_LipidClass_global_", STRESS, ".csv"))
+IN_L2 <- file.path(SPLITDIR, paste0("split_L2_Species_x_LipidClass_", STRESS, ".csv"))
+IN_L3 <- file.path(SPLITDIR, paste0("split_L3_Tissue_x_LipidClass_", STRESS, ".csv"))
+IN_L4 <- file.path(SPLITDIR, paste0("split_L4_Species_x_Tissue_x_LipidClass_", STRESS, ".csv"))
+IN_L5 <- file.path(SPLITDIR, paste0("split_L5_Species_x_Tissue_x_Stage_x_LipidClass_", STRESS, ".csv"))
+
+OUT_COR <- file.path(SPLITDIR, paste0("robustness_pairwise_mean_correlation_", STRESS, ".csv"))
+
+pairwise_cor_test <- function(path, layer, keys) {
+  df <- read_csv(path, show_col_types = FALSE) %>%
+    mutate(
+      stress   = str_to_title(str_trim(stress)),
+      platform = str_trim(platform)
+    ) %>%
+    filter(is.finite(est))
+
+  plats <- sort(unique(df$platform))
+  if (length(plats) < 2) {
+    message("Layer ", layer, ": fewer than 2 platforms, skipping.")
+    return(tibble(
+      layer = character(), p_min = character(), p_max = character(),
+      n_overlap = integer(), cor_est = numeric(),
+      cor_pval = numeric(), cor_pval_fdr = numeric(),
+      cor_ci_lo = numeric(), cor_ci_hi = numeric()
+    ))
+  }
+
+  pairs <- combn(plats, 2, simplify = FALSE)
+
+  out <- lapply(pairs, function(pp) {
+    p1 <- pp[1]; p2 <- pp[2]
+
+    d1 <- df %>% filter(platform == p1) %>% select(all_of(keys), est1 = est)
+    d2 <- df %>% filter(platform == p2) %>% select(all_of(keys), est2 = est)
+
+    dd           <- inner_join(d1, d2, by = keys)
+    n            <- nrow(dd)
+    complete_idx <- complete.cases(dd$est1, dd$est2)
+    n_complete   <- sum(complete_idx)
+
+    if (n_complete >= MIN_N_COR) {
+      ct        <- suppressWarnings(cor.test(dd$est1[complete_idx],
+                                              dd$est2[complete_idx],
+                                              method = "pearson"))
+      cor_est   <- unname(ct$estimate)
+      cor_pval  <- ct$p.value
+      cor_ci_lo <- ct$conf.int[1]
+      cor_ci_hi <- ct$conf.int[2]
+    } else {
+      cor_est <- cor_pval <- cor_ci_lo <- cor_ci_hi <- NA_real_
+    }
+
+    tibble(
+      p_min     = p1,
+      p_max     = p2,
+      n_overlap = n,
+      cor_est   = cor_est,
+      cor_pval  = cor_pval,
+      cor_ci_lo = cor_ci_lo,
+      cor_ci_hi = cor_ci_hi
+    )
+  })
+
+  bind_rows(out) %>%
+    mutate(
+      layer        = layer,
+      cor_pval_fdr = p.adjust(cor_pval, method = "BH")  # FDR within layer
+    ) %>%
+    select(layer, p_min, p_max, n_overlap, cor_est, cor_pval, cor_pval_fdr, cor_ci_lo, cor_ci_hi)
+}
+
+pair_cor <- bind_rows(
+  pairwise_cor_test(IN_L1, "L1", keys = c("stress", "Lipid_class")),
+  pairwise_cor_test(IN_L2, "L2", keys = c("stress", "plant_species", "Lipid_class")),
+  pairwise_cor_test(IN_L3, "L3", keys = c("stress", "Tissue", "Lipid_class")),
+  pairwise_cor_test(IN_L4, "L4", keys = c("stress", "plant_species", "Tissue", "Lipid_class")),
+  pairwise_cor_test(IN_L5, "L5", keys = c("stress", "plant_species", "Tissue", "Growth_stage", "Lipid_class"))
+) %>%
+  arrange(layer, p_min, p_max)
+
+write_csv(pair_cor, OUT_COR)
+
+cat(
+  "DONE.\n",
+  "Settings: STRESS = ", STRESS, " | MIN_N_COR = ", MIN_N_COR, "\n",
+  "Wrote: ", normalizePath(OUT_COR), "\n",
+  sep = ""
+)
