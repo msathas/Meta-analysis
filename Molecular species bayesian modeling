@@ -1,6 +1,81 @@
 ####### Analysis at the molecular species level 
 
-# Assuming the input is combined_data
+# Similar to other analyses, the molecular species analysis was done per treatment.
+
+# ---- Paths ----
+BASE_DIR <- "Molecular_species_meta_outputs"
+dir.create(BASE_DIR, showWarnings = FALSE, recursive = TRUE)
+
+INFILE <- "Final_combined_data_Mol.csv"
+
+# ---- Settings ----
+CHAINS      <- 4
+CORES       <- 4
+ITER        <- 4000
+WARMUP      <- 1000
+ADAPT_DELTA <- 0.99
+MAX_TREED   <- 15
+SEED        <- 1
+INIT_VAL    <- 0.1
+
+df_raw <- read_csv(INFILE, show_col_types = FALSE)
+
+df_cleaned <- df_raw %>%
+  mutate(
+    Treatment = str_to_title(str_to_lower(str_trim(Treatment))),
+    Treatment = factor(Treatment, levels = c("Heat", "Cold")),
+    Lipid_class = str_trim(Lipid_class),
+    Molecular_species = as.character(Molecular_species),
+    # Standardize molecular species format
+    Molecular_species = str_replace(Molecular_species, "^(\\d+):0*(\\d+):0*$", "\\1:\\2"),
+    Molecular_species = str_replace(Molecular_species, "^(\\d+):0*(\\d+)$", "\\1:\\2"),
+    platform = str_trim(platform),
+    Study = as.character(Study),
+    plant_species = as.character(plant_species),
+    Tissue = as.character(Tissue),
+    Growth_stage = as.character(Growth_stage)
+  ) %>%
+  filter(
+    Treatment %in% c("Heat", "Cold"),
+    !is.na(yi), !is.na(vi), is.finite(yi), is.finite(vi), vi > 0,
+    !is.na(Lipid_class), Lipid_class != "",
+    !is.na(Molecular_species), Molecular_species != "",
+    # Filter out aggregated/total entries
+    !Molecular_species %in% c("Total", "total", "Class total", 
+                              "Unknown", "NA", "n.d.", "ND", 
+                              "not determined", "nd", "UI"),
+    !is.na(platform), platform != "",
+    !is.na(Study), Study != "",
+    !is.na(Tissue), Tissue != "",
+    !is.na(plant_species), plant_species != "",
+    !is.na(Growth_stage), Growth_stage != ""
+  )
+
+# AGGREGATE DATA (weighted mean approach)
+
+# Aggregate to: Study × Treatment × Lipid_class × Molecular_species × 
+#               Tissue × Growth_stage × plant_species × platform
+# This prevents multiple effect sizes from same study/condition
+
+df_aggregated <- df_cleaned %>%
+  group_by(Study, Treatment, Lipid_class, Molecular_species,
+           Tissue, Growth_stage, plant_species, platform) %>%
+  summarise(
+    n_obs = n(),
+    # Inverse-variance weighted mean
+    yi = sum(yi / vi) / sum(1 / vi),
+    vi = 1 / sum(1 / vi),
+    .groups = "drop"
+  ) %>%
+  filter(is.finite(yi), is.finite(vi), vi > 0)
+
+cat("\n", rep("=", 80), "\n", sep = "")
+cat("DATA AGGREGATION COMPLETE\n")
+cat(rep("=", 80), "\n")
+cat("  Original rows:", nrow(df_cleaned), "\n")
+cat("  Aggregated rows:", nrow(df_aggregated), "\n")
+cat("  Reduction:", round(100 * (1 - nrow(df_aggregated)/nrow(df_cleaned)), 1), "%\n\n")
+
 # Fit one Lipid_class × Treatment combination with fallback
 fit_molecular_species <- function(data, lipid_class, treatment, output_dir) {
   
