@@ -28,7 +28,7 @@ This repository contains R code for performing a comprehensive meta-analysis of 
 - Special module to explore the role of "very-long-chain fatty acids (≥C22)"
 - Distribution trends and treatment effects highlighted
 
-### AI (Claude and ChatGPT) has been used to help with codes. AI wasn't used for data extraction, analysis or generation of results.
+#### AI (Claude and ChatGPT) has been used to help with codes. AI wasn't used for data extraction, analysis or generation of results.
 
 ---
 
